@@ -31,7 +31,7 @@ A Claude Code mod that draws a framed panel above the prompt with everything you
 In a Claude Code terminal session:
 
 ```
-/plugin install status-panel --marketplace tichara1/status-panel
+/plugin install status-panel --marketplace tichara1/ai.claude-status-panel
 ```
 
 Answer `y` to add the marketplace and pick the **user** scope so the panel shows in every project.
