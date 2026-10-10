@@ -1,0 +1,6 @@
+{
+  "name": "status-panel",
+  "owner": { "name": "Radek Tichacek" },
+  "description": "Status panel mod for Claude Code: context, limits, cost, prompt cache and subagents at a glance.",
+  "plugins": [{ "name": "status-panel", "source": "./" }]
+}
