@@ -6,6 +6,7 @@ import type {
   McpServer,
   MemFile,
   Miss,
+  PullRequest,
   Repo,
   Snap,
   SubagentInfo,
@@ -22,6 +23,7 @@ import {
   missReason,
   monthKey,
   parseAheadBehind,
+  parsePullRequest,
   percentOf,
   planFromClaudeJson,
   addCostParts,
@@ -44,7 +46,10 @@ const tallyAtom = atom(
     turns: 0,
   } as Tally,
 );
-const cacheAtAtom = atom({ plugin: "status-panel", key: "cacheAt" } as const, 0);
+const cacheAtAtom = atom(
+  { plugin: "status-panel", key: "cacheAt" } as const,
+  0,
+);
 const nowAtom = atom({ plugin: "status-panel", key: "now" } as const, 0);
 const missAtom = atom(
   { plugin: "status-panel", key: "miss" } as const,
@@ -52,7 +57,7 @@ const missAtom = atom(
 );
 const repoAtom = atom(
   { plugin: "status-panel", key: "repo" } as const,
-  { cwd: "", branch: "", sync: null } as Repo,
+  { cwd: "", branch: "", sync: null, pr: null } as Repo,
 );
 const memAtom = atom(
   { plugin: "status-panel", key: "mem" } as const,
@@ -71,7 +76,10 @@ const callsAtom = atom(
   {} as Record<string, number>,
 );
 const modelAtom = atom({ plugin: "status-panel", key: "model" } as const, "");
-const effortAtom = atom({ plugin: "status-panel", key: "effort" } as const, "–");
+const effortAtom = atom(
+  { plugin: "status-panel", key: "effort" } as const,
+  "–",
+);
 const planAtom = atom({ plugin: "status-panel", key: "plan" } as const, "");
 /** Spend for the current month across sessions (USD). */
 const spentAtom = atom({ plugin: "status-panel", key: "spent" } as const, 0);
@@ -113,8 +121,29 @@ async function openWithOs($: EngineInterface, path: string) {
   }
   const isMac =
     (await $.env.get("OSTYPE"))?.startsWith("darwin") ||
-    (await $.process.run(["uname"]).catch(() => null))?.stdout.startsWith("Darwin");
+    (await $.process.run(["uname"]).catch(() => null))?.stdout.startsWith(
+      "Darwin",
+    );
   await $.process.run([isMac ? "open" : "xdg-open", path]);
+}
+
+/** How long a looked-up pull request is trusted before `gh` is asked again. */
+const PR_TTL_MS = 2 * 60_000;
+/** Last `gh pr view` answer: the network call runs on a branch change or after PR_TTL_MS. */
+let prCache: { key: string; at: number; pr: PullRequest | null } | null = null;
+
+async function lookupPr($: EngineInterface, cwd: string, branch: string) {
+  const key = `${cwd}|${branch}`;
+  const now = await $.clock.now();
+  if (prCache?.key === key && now - prCache.at < PR_TTL_MS) return prCache.pr;
+  // Without gh, outside GitHub or without a PR it exits non-zero: no link is shown.
+  const out = await $.process
+    .run(["gh", "pr", "view", "--json", "number,url,state"], { cwd })
+    .catch(() => null);
+  const pr = out?.exitCode === 0 ? parsePullRequest(out.stdout) : null;
+  prCache = { key, at: now, pr };
+
+  return pr;
 }
 
 async function refreshRepo($: EngineInterface) {
@@ -137,7 +166,12 @@ async function refreshRepo($: EngineInterface) {
     "@{upstream}...HEAD",
   ]);
   const sync = counts?.exitCode === 0 ? parseAheadBehind(counts.stdout) : null;
-  await update($, repoAtom, () => ({ cwd, branch, sync }));
+  // A detached HEAD has no pull request.
+  const pr =
+    named?.exitCode === 0 && named.stdout.trim() !== ""
+      ? await lookupPr($, cwd, branch)
+      : null;
+  await update($, repoAtom, () => ({ cwd, branch, sync, pr }));
 }
 
 async function refreshContext($: EngineInterface) {
@@ -260,7 +294,9 @@ export const register: Register = (on, options) => {
           [agentId]: {
             ...cur,
             // A record from an older version of the mod has no durationMs.
-            durationMs: (Number.isFinite(cur.durationMs) ? cur.durationMs : 0) + e.durationMs,
+            durationMs:
+              (Number.isFinite(cur.durationMs) ? cur.durationMs : 0) +
+              e.durationMs,
             isDone: true,
           },
         };

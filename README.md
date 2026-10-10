@@ -15,7 +15,7 @@ A Claude Code mod that draws a framed panel above the prompt with everything you
 
 ## What it shows
 
-- **Header:** current folder (click to open it), git branch with ahead/behind against upstream (`↑2 ↓1`, `✓` when in sync), model with effort, subscription plan and Claude Code version.
+- **Header:** current folder (click to open it), git branch with ahead/behind against upstream (`↑2 ↓1`, `✓` when in sync), a clickable `[PR]` link when the branch has an open pull request (needs `gh`), model with effort, subscription plan and Claude Code version.
 - **Context:** fill of the context window with a colour scale (green → yellow → orange → red).
 - **Rate limits:** 5-hour and weekly windows with the time left until reset. Click a limit to show the exact reset times.
 - **Cost:** spend this calendar month against your budget (thin bar under the context bar) and the cost of the current session. Click **session** to expand:

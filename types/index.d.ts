@@ -17,11 +17,18 @@ export type Tally = {
 
 export type Miss = { at: number; reason: string } | null;
 
-/** `sync` is the state against the upstream branch as of the last fetch; `null` without an upstream. */
+/** An open pull request of the current branch as `gh pr view` reports it. */
+export type PullRequest = { number: number; url: string };
+
+/**
+ * `sync` is the state against the upstream branch as of the last fetch; `null` without an upstream.
+ * `pr` is the branch's open pull request; `null` without one, outside GitHub or without `gh`.
+ */
 export type Repo = {
   cwd: string;
   branch: string;
   sync: { ahead: number; behind: number } | null;
+  pr?: PullRequest | null;
 };
 
 export type MemFile = { path: string; type: string; tokens: number };

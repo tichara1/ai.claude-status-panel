@@ -1,4 +1,4 @@
-import type { CostParts } from "../types";
+import type { CostParts, PullRequest } from "../types";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -119,7 +119,10 @@ export const effortShort = (effort: string | number | undefined) =>
 export const parseAheadBehind = (out: string) => {
   const [behind, ahead] = out.trim().split(/\s+/).map(Number);
 
-  return Number.isFinite(behind) && Number.isFinite(ahead)
+  return behind !== undefined &&
+    ahead !== undefined &&
+    Number.isFinite(behind) &&
+    Number.isFinite(ahead)
     ? { behind, ahead }
     : null;
 };
@@ -134,6 +137,24 @@ export const serverCalls = (
   Object.entries(calls)
     .filter(([name]) => name.startsWith(`mcp__${wire(server)}__`))
     .reduce((sum, [, n]) => sum + n, 0);
+
+/** `gh pr view --json number,url,state` → the open pull request; closed, merged or broken JSON → `null`. */
+export const parsePullRequest = (out: string): PullRequest | null => {
+  let pr: { number?: unknown; url?: unknown; state?: unknown };
+  try {
+    pr = JSON.parse(out) as typeof pr;
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+
+    return null;
+  }
+
+  return pr.state === "OPEN" &&
+    typeof pr.number === "number" &&
+    typeof pr.url === "string"
+    ? { number: pr.number, url: pr.url }
+    : null;
+};
 
 /** `claude_max` + `default_claude_max_5x` → `Max 5x`; without an OAuth account `API`. */
 export const planLabel = (

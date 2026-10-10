@@ -107,7 +107,7 @@ const resetsAtMs = (resetsAt?: string) =>
 
 /** The whole band above the prompt in a frame: header, context, money, buttons and the expanded list. */
 export function renderBand(el: ElementTable, p: BandProps) {
-  const { Box, Button, Text } = el;
+  const { Box, Button, Link, Text } = el;
   // The frame takes 2 cells, the padding another 2.
   const divider = "─".repeat(Math.max(0, p.columns - 4));
 
@@ -150,6 +150,12 @@ export function renderBand(el: ElementTable, p: BandProps) {
             <Text>
               <Text dimColor>git:</Text>
               <Text color={green}>{p.repo.branch}</Text>
+              {p.repo.pr ? (
+                <Text>
+                  {" "}
+                  <Link href={p.repo.pr.url} label="[PR]" />
+                </Text>
+              ) : null}
               {p.repo.sync === null ? null : p.repo.sync.ahead === 0 &&
                 p.repo.sync.behind === 0 ? (
                 <Text dimColor> ✓</Text>

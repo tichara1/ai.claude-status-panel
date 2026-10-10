@@ -22,14 +22,20 @@ const breakdown = {
 const fiveHourResetsAt = new Date(2026, 9, 12, 19, 30);
 
 /** Answers everything the mod calls at startup, starts the session and renders the band. */
-async function mountBand($: Engine, on: On, runs: string[] = []) {
+async function mountBand(
+  $: Engine,
+  on: On,
+  runs: string[] = [],
+  answer: (argv: readonly string[]) => string | null = () => null,
+) {
   on("process.run", async (_$, e) => {
     runs.push(JSON.stringify(e));
+    const stdout = answer(e.argv);
 
     return {
       value: {
-        exitCode: 1,
-        stdout: "",
+        exitCode: stdout === null ? 1 : 0,
+        stdout: stdout ?? "",
         stderr: "",
         isStdoutTruncated: false,
         isStderrTruncated: false,
@@ -62,8 +68,9 @@ async function mountBand($: Engine, on: On, runs: string[] = []) {
   on("store.get", async () => ({ value: undefined }));
   on("store.set", async () => ({ value: undefined }));
   on("clock.every", async () => ({ value: undefined }));
+  on("session.version", async () => ({ value: { version: "" } }) as never);
   on("session.start", async () => ({ cwd: "D:/x" }));
-  await $.session.start({} as never);
+  await $.session.start({ cwd: "D:/x" } as never);
 
   return $.ui.mount({
     plugin: "status-panel",
@@ -92,4 +99,29 @@ test("the reset time of a limit shows only after pressing the limit", async ($, 
 
   expect(before).toBeUndefined();
   expect(await ui.find({ text: /\[19:30\]/ })).toBeDefined();
+});
+
+test("an open pull request of the branch shows as a [PR] link after the branch", async ($, on) => {
+  const url = "https://github.com/o/r/pull/7";
+  const ui = await mountBand($, on, [], (argv) =>
+    argv[0] === "gh"
+      ? JSON.stringify({ number: 7, url, state: "OPEN" })
+      : argv.includes("--show-current")
+        ? "feat/x\n"
+        : null,
+  );
+
+  const link = await ui.find({ text: /\[PR\]/ });
+
+  expect(link).toBeDefined();
+});
+
+test("without a pull request no [PR] link is shown", async ($, on) => {
+  const ui = await mountBand($, on, [], (argv) =>
+    argv.includes("--show-current") ? "main\n" : null,
+  );
+
+  const link = await ui.find({ text: /\[PR\]/ });
+
+  expect(link).toBeUndefined();
 });

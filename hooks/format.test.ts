@@ -5,6 +5,7 @@ import {
   effortShort,
   serverCalls,
   parseAheadBehind,
+  parsePullRequest,
   planLabel,
   noLink,
   stepCost,
@@ -201,7 +202,14 @@ test("addAgentStep sums all tokens and keeps an unpriced agent unpriced", () => 
     cache_creation_input_tokens: 4,
   };
   const first = addAgentStep(undefined, "m", u, 0.5);
-  expect(first).toEqual({ model: "m", tokens: 10, usd: 0.5, durationMs: 0, isDone: false, effort: "–" });
+  expect(first).toEqual({
+    model: "m",
+    tokens: 10,
+    usd: 0.5,
+    durationMs: 0,
+    isDone: false,
+    effort: "–",
+  });
   expect(addAgentStep(first, "m", u, 0.5, "H").effort).toBe("H");
   expect(addAgentStep(first, "m", u, null).usd).toBeNull();
 });
@@ -220,30 +228,72 @@ test("thinBar splits filled and empty cells and caps at the width", () => {
   expect(thinBar(150, 3)).toEqual({ filled: "━━━", empty: "" });
 });
 
-test('relIn shows days and hours from a day up', () => {
-  expect(relIn(at(19, 30) + (5 * 24 + 5) * 3_600_000, at(19, 30))).toBe('5d5h')
-})
+test("relIn shows days and hours from a day up", () => {
+  expect(relIn(at(19, 30) + (5 * 24 + 5) * 3_600_000, at(19, 30))).toBe("5d5h");
+});
 
-test('stepCostParts splits a request by token kind and addCostParts sums it', () => {
-  const u = { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }
-  const parts = stepCostParts('claude-opus-5-5', u, 60)
-  expect(parts).toEqual({ input: 4, output: 20, read: 0.2, write: 8 })
-  const zero = { input: 0, output: 0, read: 0, write: 0 }
-  expect(addCostParts(zero, parts)).toEqual(parts)
-  expect(addCostParts(zero, null)).toEqual(zero)
-})
+test("stepCostParts splits a request by token kind and addCostParts sums it", () => {
+  const u = {
+    input_tokens: 1_000_000,
+    output_tokens: 1_000_000,
+    cache_read_input_tokens: 1_000_000,
+    cache_creation_input_tokens: 1_000_000,
+  };
+  const parts = stepCostParts("claude-opus-5-5", u, 60);
+  expect(parts).toEqual({ input: 4, output: 20, read: 0.2, write: 8 });
+  const zero = { input: 0, output: 0, read: 0, write: 0 };
+  expect(addCostParts(zero, parts)).toEqual(parts);
+  expect(addCostParts(zero, null)).toEqual(zero);
+});
 
-test('shortModel drops the claude- prefix', () => {
-  expect([shortModel('claude-opus-5-5'), shortModel('opus')]).toEqual(['opus-5-5', 'opus'])
-})
+test("shortModel drops the claude- prefix", () => {
+  expect([shortModel("claude-opus-5-5"), shortModel("opus")]).toEqual([
+    "opus-5-5",
+    "opus",
+  ]);
+});
 
-test('elapsed formats seconds, minutes and hours', () => {
-  expect([elapsed(5_000), elapsed(192_000), elapsed(3_900_000)]).toEqual(['5s', '3m12s', '1h05m'])
-})
+test("elapsed formats seconds, minutes and hours", () => {
+  expect([elapsed(5_000), elapsed(192_000), elapsed(3_900_000)]).toEqual([
+    "5s",
+    "3m12s",
+    "1h05m",
+  ]);
+});
 
-test('agentStatus shows done with duration, running with elapsed time, never NaN', () => {
-  expect(agentStatus(0, { isDone: true, durationMs: 5_000 }, 60_000, 0)).toEqual({ icon: '✅', text: '5s' })
-  expect(agentStatus(0, { isDone: false, durationMs: 0 }, 80_000, 4)).toEqual({ icon: '✻ ', text: 'running 1m20s' })
-  expect(agentStatus(undefined, {}, 80_000, 1)).toEqual({ icon: '✢ ', text: 'running' })
-  expect(agentStatus(undefined, { isDone: true, durationMs: Number.NaN }, 80_000, 0)).toEqual({ icon: '✅', text: '' })
-})
+test("agentStatus shows done with duration, running with elapsed time, never NaN", () => {
+  expect(
+    agentStatus(0, { isDone: true, durationMs: 5_000 }, 60_000, 0),
+  ).toEqual({ icon: "✅", text: "5s" });
+  expect(agentStatus(0, { isDone: false, durationMs: 0 }, 80_000, 4)).toEqual({
+    icon: "✻ ",
+    text: "running 1m20s",
+  });
+  expect(agentStatus(undefined, {}, 80_000, 1)).toEqual({
+    icon: "✢ ",
+    text: "running",
+  });
+  expect(
+    agentStatus(undefined, { isDone: true, durationMs: Number.NaN }, 80_000, 0),
+  ).toEqual({ icon: "✅", text: "" });
+});
+
+test("parsePullRequest returns an open pull request", () => {
+  const pr = parsePullRequest(
+    '{"number":7,"state":"OPEN","url":"https://github.com/o/r/pull/7"}',
+  );
+
+  expect(pr).toEqual({ number: 7, url: "https://github.com/o/r/pull/7" });
+});
+
+test("parsePullRequest ignores a merged pull request", () => {
+  const pr = parsePullRequest(
+    '{"number":7,"state":"MERGED","url":"https://github.com/o/r/pull/7"}',
+  );
+
+  expect(pr).toBeNull();
+});
+
+test("parsePullRequest returns null for broken output", () => {
+  expect(parsePullRequest("no pull requests found")).toBeNull();
+});
