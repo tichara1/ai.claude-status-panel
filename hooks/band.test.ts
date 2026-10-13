@@ -27,6 +27,8 @@ async function mountBand(
   on: On,
   runs: string[] = [],
   answer: (argv: readonly string[]) => string | null = () => null,
+  /** Body of `api/oauth/usage`; without it the session has no account to ask. */
+  usage?: string,
 ) {
   on("process.run", async (_$, e) => {
     runs.push(JSON.stringify(e));
@@ -61,6 +63,12 @@ async function mountBand(
       }) as never,
   );
   on("session.cwd", async () => ({ value: "D:/x" }));
+  on("session.authorize", async () => ({
+    value: usage === undefined ? null : { handle: "h", kind: "bearer" },
+  }));
+  on("http.fetch", async () => ({
+    value: { status: 200, ok: true, headers: {}, text: usage ?? "" },
+  }));
   on("env.get", async () => ({ value: undefined }));
   on("clock.now", async () => ({
     value: fiveHourResetsAt.getTime() - 90 * 60_000,
@@ -79,6 +87,31 @@ async function mountBand(
     props,
   });
 }
+
+test("a personal plan shows no extra usage before the account answers", async ($, on) => {
+  const ui = await mountBand($, on);
+
+  const line = await ui.find({ text: /extra –/ });
+
+  expect(line).toBeDefined();
+});
+
+test("a personal plan shows extra usage and credits the account reports", async ($, on) => {
+  const usd = (cents: number) => ({ amount_minor: cents, exponent: 2 });
+  const usage = JSON.stringify({
+    spend: {
+      used: usd(300),
+      limit: usd(2000),
+      balance: usd(550),
+      enabled: true,
+    },
+  });
+  const ui = await mountBand($, on, [], () => null, usage);
+
+  const line = await ui.find({ text: /extra \$3\.00 \/ \$20\.00 +💳 \$5\.50/ });
+
+  expect(line).toBeDefined();
+});
 
 test("pressing CLAUDE.md expands the file list and opens nothing", async ($, on) => {
   const runs: string[] = [];
@@ -101,7 +134,7 @@ test("the reset time of a limit shows only after pressing the limit", async ($, 
   expect(await ui.find({ text: /\[19:30\]/ })).toBeDefined();
 });
 
-test("an open pull request of the branch shows as a [PR] link after the branch", async ($, on) => {
+test("an open pull request of the branch shows as a [PR#n] link after the branch", async ($, on) => {
   const url = "https://github.com/o/r/pull/7";
   const ui = await mountBand($, on, [], (argv) =>
     argv[0] === "gh"
@@ -111,7 +144,30 @@ test("an open pull request of the branch shows as a [PR] link after the branch",
         : null,
   );
 
-  const link = await ui.find({ text: /\[PR\]/ });
+  const link = await ui.find({ text: /\[PR#7\]/ });
+
+  expect(link).toBeDefined();
+});
+
+test("on Azure DevOps the pull request is looked up with az", async ($, on) => {
+  const ui = await mountBand($, on, [], (argv) =>
+    argv.includes("get-url")
+      ? "https://org@dev.azure.com/org/proj/_git/repo\n"
+      : argv.includes("repos")
+        ? JSON.stringify([
+            {
+              pullRequestId: 5541,
+              repository: {
+                webUrl: "https://dev.azure.com/org/proj/_git/repo",
+              },
+            },
+          ])
+        : argv.includes("--show-current")
+          ? "feat/x\n"
+          : null,
+  );
+
+  const link = await ui.find({ text: /\[PR#5541\]/ });
 
   expect(link).toBeDefined();
 });
@@ -121,7 +177,7 @@ test("without a pull request no [PR] link is shown", async ($, on) => {
     argv.includes("--show-current") ? "main\n" : null,
   );
 
-  const link = await ui.find({ text: /\[PR\]/ });
+  const link = await ui.find({ text: /\[PR#/ });
 
   expect(link).toBeUndefined();
 });

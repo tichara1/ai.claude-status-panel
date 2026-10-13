@@ -1,6 +1,6 @@
 {
   "name": "status-panel",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A framed panel above the prompt showing context, rate limits, session cost against a monthly budget, prompt-cache state with a live TTL countdown, git branch, model/effort/plan, loaded CLAUDE.md/AGENTS.md/MCP, and subagents.",
   "author": { "name": "Radek Tichacek" },
   "license": "MIT",
@@ -16,7 +16,7 @@
     "budgetUsd": {
       "type": "string",
       "title": "Monthly budget (USD)",
-      "description": "Spending cap per calendar month that the progress bar is measured against.",
+      "description": "Enterprise spending cap per calendar month, used when the account reports no limit of its own.",
       "default": "250"
     }
   }

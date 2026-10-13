@@ -8,6 +8,7 @@ import type {
   McpServer,
   MemFile,
   Miss,
+  Money,
   Repo,
   Snap,
   Tally,
@@ -41,9 +42,8 @@ export type BandProps = {
   now: number;
   ttlMs: number;
   snap: Snap;
-  /** Spend for the current month across sessions. */
-  spent: number;
-  budget: number;
+  /** Extra usage beyond a personal plan, or all spend this month on Enterprise. */
+  money: Money;
   tally: Tally;
   cacheAt: number;
   miss: Miss;
@@ -127,7 +127,11 @@ export function renderBand(el: ElementTable, p: BandProps) {
         : CALM;
   const sum = p.tally.read + p.tally.write + p.tally.input;
   const sessionHit = sum === 0 ? null : Math.round((p.tally.read / sum) * 100);
-  const budgetPercent = p.budget > 0 ? (p.spent / p.budget) * 100 : 0;
+  const { money } = p;
+  const moneyPercent =
+    money.spent !== null && money.limit !== null && money.limit > 0
+      ? (money.spent / money.limit) * 100
+      : 0;
   const rightCells =
     LIMIT_CELLS + (p.showResets ? RESET_CELLS : 0) + ROBOT_CELLS;
 
@@ -153,7 +157,10 @@ export function renderBand(el: ElementTable, p: BandProps) {
               {p.repo.pr ? (
                 <Text>
                   {" "}
-                  <Link href={p.repo.pr.url} label="[PR]" />
+                  <Link
+                    href={p.repo.pr.url}
+                    label={`[PR#${p.repo.pr.number}]`}
+                  />
                 </Text>
               ) : null}
               {p.repo.sync === null ? null : p.repo.sync.ahead === 0 &&
@@ -205,12 +212,21 @@ export function renderBand(el: ElementTable, p: BandProps) {
           <Box columnGap={1}>
             <Text>
               💰{" "}
-              <Text color={scale(budgetPercent)} dimColor>
-                {thinBar(budgetPercent, CTX_CELLS).filled}
+              <Text color={scale(moneyPercent)} dimColor>
+                {thinBar(moneyPercent, CTX_CELLS).filled}
               </Text>
-              <Text dimColor>{thinBar(budgetPercent, CTX_CELLS).empty} </Text>
-              <Text bold>{usd(p.spent)}</Text>
-              <Text dimColor> / {usd(p.budget)}</Text>
+              <Text dimColor>{thinBar(moneyPercent, CTX_CELLS).empty} </Text>
+              <Text dimColor>{money.label} </Text>
+              <Text bold>{money.spent === null ? "–" : usd(money.spent)}</Text>
+              {money.limit === null ? null : (
+                <Text dimColor> / {usd(money.limit)}</Text>
+              )}
+              {money.isOff ? <Text dimColor> (off)</Text> : null}
+              {money.balance === null ? null : (
+                <Text>
+                  {"  "}💳 <Text bold>{usd(money.balance)}</Text>
+                </Text>
+              )}
             </Text>
             <Button
               key="k-session"

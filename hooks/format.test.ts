@@ -6,6 +6,9 @@ import {
   serverCalls,
   parseAheadBehind,
   parsePullRequest,
+  parseAzurePullRequest,
+  azureWebUrl,
+  isAzureRemote,
   planLabel,
   noLink,
   stepCost,
@@ -17,7 +20,9 @@ import {
   addAgentStep,
   elapsed,
   agentStatus,
-  planFromClaudeJson,
+  accountFromClaudeJson,
+  parseAccountSpend,
+  moneyLine,
   thinBar,
   shortModel,
   countdown,
@@ -163,8 +168,10 @@ test("stepCost prices a request by model and cache TTL", () => {
   expect(stepCost("gpt-x", u, 60)).toBeNull();
 });
 
-test("monthKey keys spend by local month", () => {
-  expect(monthKey(new Date(2026, 9, 12).getTime())).toBe("spend:2026-10");
+test("monthKey keys spend by local month and organization", () => {
+  expect(monthKey(new Date(2026, 9, 12).getTime(), "org1")).toBe(
+    "spend:2026-10:org1",
+  );
 });
 
 test("missReason prefers a gap over TTL when nothing else changed", () => {
@@ -214,13 +221,86 @@ test("addAgentStep sums all tokens and keeps an unpriced agent unpriced", () => 
   expect(addAgentStep(first, "m", u, null).usd).toBeNull();
 });
 
-test("planFromClaudeJson reads only the plan", () => {
+test("accountFromClaudeJson reads the plan and that a Max plan is not usage based", () => {
   expect(
-    planFromClaudeJson(
-      '{"oauthAccount":{"organizationType":"claude_max","organizationRateLimitTier":"default_claude_max_5x"}}',
+    accountFromClaudeJson(
+      '{"oauthAccount":{"organizationUuid":"o","organizationType":"claude_max","organizationRateLimitTier":"default_claude_max_5x"}}',
     ),
-  ).toBe("Max 5x");
-  expect(planFromClaudeJson("{oops")).toBeNull();
+  ).toEqual({ plan: "Max 5x", orgId: "o", isUsageBased: false });
+  expect(accountFromClaudeJson("{oops")).toBeNull();
+});
+
+test("accountFromClaudeJson marks an Enterprise seat as usage based", () => {
+  const account = accountFromClaudeJson(
+    '{"oauthAccount":{"organizationUuid":"e","organizationType":"claude_enterprise"}}',
+  );
+
+  expect(account?.isUsageBased).toBe(true);
+});
+
+test("parseAccountSpend converts minor units to dollars", () => {
+  const text = JSON.stringify({
+    spend: {
+      used: { amount_minor: 1234, currency: "USD", exponent: 2 },
+      limit: { amount_minor: 5000, currency: "USD", exponent: 2 },
+      balance: { amount_minor: 750, currency: "USD", exponent: 2 },
+      enabled: true,
+    },
+  });
+
+  expect(parseAccountSpend(text)).toEqual({
+    used: 12.34,
+    limit: 50,
+    balance: 7.5,
+    isEnabled: true,
+  });
+});
+
+test("parseAccountSpend returns null without a spend block or for broken JSON", () => {
+  expect([
+    parseAccountSpend('{"spend":null}'),
+    parseAccountSpend("{oops"),
+  ]).toEqual([null, null]);
+});
+
+const personal = { orgId: "p", isUsageBased: false };
+const enterprise = { orgId: "e", isUsageBased: true };
+const spend = { used: 3, limit: 20, balance: 5, isEnabled: true };
+
+test("moneyLine on a personal plan shows only extra usage from the account", () => {
+  expect(moneyLine(personal, spend, 99, 250)).toEqual({
+    label: "extra",
+    spent: 3,
+    limit: 20,
+    balance: 5,
+    isOff: false,
+  });
+});
+
+test("moneyLine on a personal plan never falls back to the local estimate", () => {
+  expect(moneyLine(personal, null, 99, 250).spent).toBeNull();
+});
+
+test("moneyLine marks switched-off extra usage", () => {
+  expect(
+    moneyLine(personal, { ...spend, isEnabled: false }, 0, 250).isOff,
+  ).toBe(true);
+});
+
+test("moneyLine on Enterprise without account figures uses the local estimate and budget", () => {
+  expect(moneyLine(enterprise, null, 42, 250)).toEqual({
+    label: "month",
+    spent: 42,
+    limit: 250,
+    balance: null,
+    isOff: false,
+  });
+});
+
+test("moneyLine on Enterprise prefers the account's figures once reported", () => {
+  const line = moneyLine(enterprise, { ...spend, limit: null }, 42, 250);
+
+  expect([line.spent, line.limit]).toEqual([3, 250]);
 });
 
 test("thinBar splits filled and empty cells and caps at the width", () => {
@@ -296,4 +376,50 @@ test("parsePullRequest ignores a merged pull request", () => {
 
 test("parsePullRequest returns null for broken output", () => {
   expect(parsePullRequest("no pull requests found")).toBeNull();
+});
+
+test("isAzureRemote recognizes Azure DevOps over https and ssh, not GitHub", () => {
+  expect(
+    [
+      "https://org@dev.azure.com/org/proj/_git/repo",
+      "git@ssh.dev.azure.com:v3/org/proj/repo",
+      "https://org.visualstudio.com/proj/_git/repo",
+      "https://github.com/o/r.git",
+    ].map(isAzureRemote),
+  ).toEqual([true, true, true, false]);
+});
+
+test("parseAzurePullRequest links the first pull request to its web page", () => {
+  const out = JSON.stringify([
+    {
+      pullRequestId: 5541,
+      repository: { webUrl: "https://dev.azure.com/o/p/_git/r" },
+    },
+  ]);
+
+  expect(parseAzurePullRequest(out, "")).toEqual({
+    number: 5541,
+    url: "https://dev.azure.com/o/p/_git/r/pullrequest/5541",
+  });
+});
+
+test("parseAzurePullRequest without webUrl derives the page from origin", () => {
+  const out = JSON.stringify([{ pullRequestId: 5541 }]);
+
+  expect(
+    parseAzurePullRequest(out, "git@ssh.dev.azure.com:v3/o/p/r\n")?.url,
+  ).toBe("https://dev.azure.com/o/p/_git/r/pullrequest/5541");
+});
+
+test("azureWebUrl drops the user name and .git from an https remote", () => {
+  expect(azureWebUrl("https://o@dev.azure.com/o/p/_git/r.git")).toBe(
+    "https://dev.azure.com/o/p/_git/r",
+  );
+});
+
+test("parseAzurePullRequest returns null for no pull request or broken output", () => {
+  expect([
+    parseAzurePullRequest("[]", ""),
+    parseAzurePullRequest("oops", ""),
+  ]).toEqual([null, null]);
 });

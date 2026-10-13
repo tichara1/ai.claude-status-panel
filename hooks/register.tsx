@@ -2,6 +2,8 @@ import { atom, read, update } from "claude-code";
 import type { EngineInterface, Register } from "claude-code";
 
 import type {
+  AccountSpend,
+  Billing,
   Kind,
   McpServer,
   MemFile,
@@ -21,11 +23,15 @@ import {
   emptyAgent,
   groupMcp,
   missReason,
+  moneyLine,
   monthKey,
+  isAzureRemote,
   parseAheadBehind,
+  parseAzurePullRequest,
+  parseAccountSpend,
   parsePullRequest,
   percentOf,
-  planFromClaudeJson,
+  accountFromClaudeJson,
   addCostParts,
   stepCost,
   stepCostParts,
@@ -81,8 +87,17 @@ const effortAtom = atom(
   "–",
 );
 const planAtom = atom({ plugin: "status-panel", key: "plan" } as const, "");
-/** Spend for the current month across sessions (USD). */
+/** Local estimate of this organization's spend for the current month across sessions (USD). */
 const spentAtom = atom({ plugin: "status-panel", key: "spent" } as const, 0);
+/** Usage beyond the plan as the account reports it; `null` until read. */
+const accountAtom = atom(
+  { plugin: "status-panel", key: "account" } as const,
+  null as AccountSpend | null,
+);
+const billingAtom = atom(
+  { plugin: "status-panel", key: "billing" } as const,
+  { orgId: "", isUsageBased: false } as Billing,
+);
 const agentsAtom = atom(
   { plugin: "status-panel", key: "agents" } as const,
   [] as SubagentInfo[],
@@ -127,20 +142,48 @@ async function openWithOs($: EngineInterface, path: string) {
   await $.process.run([isMac ? "open" : "xdg-open", path]);
 }
 
-/** How long a looked-up pull request is trusted before `gh` is asked again. */
+/** How long a looked-up pull request is trusted before `gh` or `az` is asked again. */
 const PR_TTL_MS = 2 * 60_000;
-/** Last `gh pr view` answer: the network call runs on a branch change or after PR_TTL_MS. */
+/** Last `gh` / `az` answer: the network call runs on a branch change or after PR_TTL_MS. */
 let prCache: { key: string; at: number; pr: PullRequest | null } | null = null;
 
 async function lookupPr($: EngineInterface, cwd: string, branch: string) {
   const key = `${cwd}|${branch}`;
   const now = await $.clock.now();
   if (prCache?.key === key && now - prCache.at < PR_TTL_MS) return prCache.pr;
-  // Without gh, outside GitHub or without a PR it exits non-zero: no link is shown.
-  const out = await $.process
-    .run(["gh", "pr", "view", "--json", "number,url,state"], { cwd })
-    .catch(() => null);
-  const pr = out?.exitCode === 0 ? parsePullRequest(out.stdout) : null;
+  // Without the CLI, without a login or without a PR it fails: no link is shown.
+  const run = (argv: string[]) =>
+    $.process.run(argv, { cwd }).catch(() => null);
+  const remote = await run(["git", "remote", "get-url", "origin"]);
+  let pr: PullRequest | null;
+  if (remote?.exitCode === 0 && isAzureRemote(remote.stdout)) {
+    // `az` is a .cmd script on Windows, which only a shell starts.
+    const az =
+      (await $.env.get("OS")) === "Windows_NT" ? ["cmd", "/c", "az"] : ["az"];
+    const out = await run([
+      ...az,
+      "repos",
+      "pr",
+      "list",
+      "--detect",
+      "true",
+      "--source-branch",
+      branch,
+      "--status",
+      "active",
+      "--top",
+      "1",
+      "-o",
+      "json",
+    ]);
+    pr =
+      out?.exitCode === 0
+        ? parseAzurePullRequest(out.stdout, remote.stdout)
+        : null;
+  } else {
+    const out = await run(["gh", "pr", "view", "--json", "number,url,state"]);
+    pr = out?.exitCode === 0 ? parsePullRequest(out.stdout) : null;
+  }
   prCache = { key, at: now, pr };
 
   return pr;
@@ -196,17 +239,55 @@ async function refreshPlan($: EngineInterface) {
   if (dir === undefined) return;
   // A missing file just means we do not show the subscription.
   const text = await $.fs.read(`${dir}/.claude.json`).catch(() => null);
-  const plan = typeof text === "string" ? planFromClaudeJson(text) : null;
-  if (plan !== null) await update($, planAtom, () => plan);
+  const account = typeof text === "string" ? accountFromClaudeJson(text) : null;
+  if (account === null) return;
+  await update($, planAtom, () => account.plan);
+  const prev = await read($, billingAtom);
+  await update($, billingAtom, () => ({
+    orgId: account.orgId,
+    isUsageBased: account.isUsageBased,
+  }));
+  // After /login into another account the old figures do not apply.
+  if (prev.orgId !== "" && prev.orgId !== account.orgId) {
+    await update($, accountAtom, () => null);
+    await refreshAccount($);
+  }
 }
 
-/** Writes this session's cost into the monthly total in `$.store` and reflects the total in state. */
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+
+/** Reads usage beyond the plan and prepaid credits of the signed-in account. */
+async function refreshAccount($: EngineInterface) {
+  // Null with an API key, a 3P provider or no login: there is no account to ask.
+  const auth = await $.session.authorize();
+  if (auth === null) return;
+  // Offline or rate limited: the line keeps the last figures.
+  const res = await $.http
+    .fetch(USAGE_URL, {
+      auth: auth.handle,
+      headers: {
+        Accept: "application/json",
+        "anthropic-beta": "oauth-2025-04-20",
+      },
+    })
+    .catch(() => null);
+  if (res?.ok !== true) return;
+  const spend = parseAccountSpend(res.text);
+  await update($, accountAtom, () => spend);
+}
+
+/**
+ * Writes this session's cost into the organization's monthly total in `$.store` and reflects
+ * the total in state. Only an Enterprise seat pays for every request, so only it is counted.
+ */
 async function refreshSpend(
   $: EngineInterface,
   startedAt: number,
   usd: number,
 ) {
-  const key = monthKey(await $.clock.now());
+  const billing = await read($, billingAtom);
+  if (!billing.isUsageBased) return;
+  const key = monthKey(await $.clock.now(), billing.orgId);
   const stored = (await $.store.get(key)) as Record<string, number> | undefined;
   const sessions = { ...stored, [String(startedAt)]: usd };
   await $.store.set(key, sessions);
@@ -253,10 +334,12 @@ export const register: Register = (on, options) => {
   on("session.start", async ($, e, next) => {
     const startedAt = await $.clock.now();
     await update($, nowAtom, () => startedAt);
+    // The plan decides whether this session's cost counts toward the month.
+    await refreshPlan($);
     await refresh($);
     await refreshRepo($);
     await refreshContext($);
-    await refreshPlan($);
+    await refreshAccount($);
     const { version } = await $.session.version();
     await update($, versionAtom, () => version);
     $.clock.every(250, async () => {
@@ -273,7 +356,9 @@ export const register: Register = (on, options) => {
       if (ticks % 30 === 0) {
         await refreshRepo($);
         await refreshContext($);
+        await refreshPlan($);
       }
+      if (ticks % 120 === 0) await refreshAccount($);
     });
 
     return next(e);
@@ -437,8 +522,12 @@ export const register: Register = (on, options) => {
       now: await read($, nowAtom),
       ttlMs,
       snap,
-      spent: await read($, spentAtom),
-      budget,
+      money: moneyLine(
+        await read($, billingAtom),
+        await read($, accountAtom),
+        await read($, spentAtom),
+        budget,
+      ),
       tally: await read($, tallyAtom),
       cacheAt: await read($, cacheAtAtom),
       miss: await read($, missAtom),
