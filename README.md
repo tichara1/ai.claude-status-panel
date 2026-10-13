@@ -15,10 +15,13 @@ A Claude Code mod that draws a framed panel above the prompt with everything you
 
 ## What it shows
 
-- **Header:** current folder (click to open it), git branch with ahead/behind against upstream (`↑2 ↓1`, `✓` when in sync), a clickable `[PR]` link when the branch has an open pull request (needs `gh`), model with effort, subscription plan and Claude Code version.
+- **Header:** current folder (click to open it), git branch with ahead/behind against upstream (`↑2 ↓1`, `✓` when in sync), a clickable `[PR#5541]` link when the branch has an open pull request (GitHub via `gh`, Azure DevOps via `az` with the `azure-devops` extension), model with effort, subscription plan and Claude Code version.
 - **Context:** fill of the context window with a colour scale (green → yellow → orange → red).
 - **Rate limits:** 5-hour and weekly windows with the time left until reset. Click a limit to show the exact reset times.
-- **Cost:** spend this calendar month against your budget (thin bar under the context bar) and the cost of the current session. Click **session** to expand:
+- **Cost:** what you actually pay, depending on the signed-in account (switching with `/login` is picked up within 30 s):
+  - personal plan (Pro/Max): `extra` usage beyond the subscription against its monthly limit, `(off)` when extra usage is switched off, and `💳` the prepaid credits left, all read from your account,
+  - Enterprise: all spend this calendar month against `budgetUsd`, from your account once it reports it, otherwise estimated from the price list per organization,
+  - and the cost of the current session. Click **session** to expand:
   - tokens burned this session with a price-list estimate,
   - every subagent with its type, model, effort, tokens, status (animated `✻ running 1m20s` or `✅ 8s`) and estimated cost, in aligned columns.
 - **Prompt cache:** hit rate of the last request and of the session, plus a live countdown until the cache expires (TTL). A `⚠ cache miss` line explains the most likely cause (idle longer than TTL, model or effort change, compaction, `/clear`) and disappears once the cache is warm again.
@@ -45,7 +48,7 @@ Answer `y` to add the marketplace and pick the **user** scope so the panel shows
 | Option | Default | Meaning |
 |---|---|---|
 | `ttlMinutes` | `60` | Prompt-cache TTL your requests use (`5` or `60`). Drives the countdown and the cache-write price. |
-| `budgetUsd` | `250` | Monthly budget in USD that the cost bar is measured against. |
+| `budgetUsd` | `250` | Monthly Enterprise budget in USD that the cost bar is measured against when the account reports no limit of its own. |
 
 ## Update and uninstall
 

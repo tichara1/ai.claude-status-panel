@@ -1,4 +1,10 @@
-import type { CostParts, PullRequest } from "../types";
+import type {
+  AccountSpend,
+  Billing,
+  CostParts,
+  Money,
+  PullRequest,
+} from "../types";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -138,6 +144,54 @@ export const serverCalls = (
     .filter(([name]) => name.startsWith(`mcp__${wire(server)}__`))
     .reduce((sum, [, n]) => sum + n, 0);
 
+/** An `origin` URL of Azure DevOps (`dev.azure.com`, `*.visualstudio.com`, also over SSH). */
+export const isAzureRemote = (url: string) =>
+  /(^|[@./])(dev\.azure\.com|visualstudio\.com)[:/]/i.test(url.trim());
+
+/**
+ * `az repos pr list --status active -o json` → the first pull request with its web page;
+ * an empty list or broken JSON → `null`.
+ */
+/**
+ * Web page of an Azure DevOps repository from its `origin` URL:
+ * `https://org@dev.azure.com/o/p/_git/r` or `git@ssh.dev.azure.com:v3/o/p/r` → `https://dev.azure.com/o/p/_git/r`.
+ */
+export const azureWebUrl = (remote: string) => {
+  const url = remote.trim().replace(/\.git$/, "");
+  const ssh = /[:/]v3\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url);
+  if (ssh) return `https://dev.azure.com/${ssh[1]}/${ssh[2]}/_git/${ssh[3]}`;
+
+  return url.replace(/^https:\/\/[^@/]+@/, "https://");
+};
+
+/**
+ * `az repos pr list --status active -o json` → the first pull request with its web page
+ * (the repository's `webUrl`, else derived from `origin`); an empty list or broken JSON → `null`.
+ */
+export const parseAzurePullRequest = (
+  out: string,
+  remote: string,
+): PullRequest | null => {
+  let list: unknown;
+  try {
+    list = JSON.parse(out);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+
+    return null;
+  }
+  const pr = (Array.isArray(list) ? list[0] : undefined) as
+    | { pullRequestId?: unknown; repository?: { webUrl?: unknown } }
+    | undefined;
+  const id = pr?.pullRequestId;
+  const webUrl = pr?.repository?.webUrl;
+  const web = typeof webUrl === "string" ? webUrl : azureWebUrl(remote);
+
+  return typeof id === "number"
+    ? { number: id, url: `${web}/pullrequest/${id}` }
+    : null;
+};
+
 /** `gh pr view --json number,url,state` → the open pull request; closed, merged or broken JSON → `null`. */
 export const parsePullRequest = (out: string): PullRequest | null => {
   let pr: { number?: unknown; url?: unknown; state?: unknown };
@@ -244,11 +298,11 @@ export const addCostParts = (
         write: sum.write + parts.write,
       };
 
-/** Month key in `$.store` for the spend total: `spend:2026-10`. */
-export const monthKey = (ms: number) => {
+/** Month key in `$.store` for one organization's spend total: `spend:2026-10:<org>`. */
+export const monthKey = (ms: number, orgId: string) => {
   const d = new Date(ms);
 
-  return `spend:${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  return `spend:${d.getFullYear()}-${pad(d.getMonth() + 1)}:${orgId}`;
 };
 
 export type MissInput = {
@@ -405,9 +459,15 @@ export const elapsed = (ms: number) => {
   return `${Math.floor(m / 60)}h${pad(m % 60)}m`;
 };
 
-/** Takes only the organization type and tier from the contents of `~/.claude.json`; broken JSON → `null`. */
-export const planFromClaudeJson = (text: string) => {
+/**
+ * Takes the plan label and billing from the contents of `~/.claude.json`; broken JSON → `null`.
+ * An Enterprise seat pays for every request, a personal subscription only for extra usage.
+ */
+export const accountFromClaudeJson = (
+  text: string,
+): ({ plan: string } & Billing) | null => {
   type Account = {
+    organizationUuid?: string;
     organizationType?: string;
     organizationRateLimitTier?: string;
   };
@@ -420,11 +480,74 @@ export const planFromClaudeJson = (text: string) => {
     return null;
   }
 
-  return planLabel(
-    account?.organizationType,
-    account?.organizationRateLimitTier,
+  return {
+    plan: planLabel(
+      account?.organizationType,
+      account?.organizationRateLimitTier,
+    ),
+    orgId: account?.organizationUuid ?? "",
+    isUsageBased: account?.organizationType === "claude_enterprise",
+  };
+};
+
+/** `{ amount_minor: 1234, exponent: 2 }` or a plain number → USD; anything else → `null`. */
+const dollars = (value: unknown) => {
+  if (typeof value === "number") return value;
+  const m = value as { amount_minor?: unknown; exponent?: unknown } | null;
+  if (typeof m?.amount_minor !== "number") return null;
+
+  return (
+    m.amount_minor / 10 ** (typeof m.exponent === "number" ? m.exponent : 2)
   );
 };
+
+/** The `spend` block of `api/oauth/usage` (usage beyond the plan); missing or broken JSON → `null`. */
+export const parseAccountSpend = (text: string): AccountSpend | null => {
+  let spend: Record<string, unknown> | null | undefined;
+  try {
+    spend = (JSON.parse(text) as { spend?: Record<string, unknown> | null })
+      .spend;
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+
+    return null;
+  }
+  if (spend === null || spend === undefined) return null;
+
+  return {
+    used: dollars(spend.used) ?? 0,
+    limit: dollars(spend.limit) ?? dollars(spend.cap),
+    balance: dollars(spend.balance),
+    isEnabled: spend.enabled === true,
+  };
+};
+
+/**
+ * What the money line shows. A personal subscription: only extra usage beyond the plan
+ * from the account (`null` until it is read). Enterprise: all spend this month against the
+ * budget, from the account once it reports it, otherwise the local estimate.
+ */
+export const moneyLine = (
+  billing: Billing,
+  account: AccountSpend | null,
+  localSpent: number,
+  budget: number,
+): Money =>
+  billing.isUsageBased
+    ? {
+        label: "month",
+        spent: account?.isEnabled === true ? account.used : localSpent,
+        limit: account?.limit ?? budget,
+        balance: account?.balance ?? null,
+        isOff: false,
+      }
+    : {
+        label: "extra",
+        spent: account?.used ?? null,
+        limit: account?.limit ?? null,
+        balance: account?.balance ?? null,
+        isOff: account !== null && !account.isEnabled,
+      };
 
 /** Thin bar `━━━───` split into a filled and an empty part so they can be colored separately. */
 export const thinBar = (percent: number, cells: number) => {
