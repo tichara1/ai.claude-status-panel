@@ -20,6 +20,7 @@ import type {
 import { renderBand } from "./band";
 import type { Disabled } from "./format";
 import { renderList } from "./lists";
+import { renderMemory } from "./memory";
 import { renderTools } from "./tools";
 import {
   addAgentStep,
@@ -77,10 +78,6 @@ const repoAtom = atom(
 const memAtom = atom(
   { plugin: "status-panel", key: "mem" } as const,
   [] as MemFile[],
-);
-const openAtom = atom(
-  { plugin: "status-panel", key: "open" } as const,
-  null as Kind | null,
 );
 const mcpAtom = atom(
   { plugin: "status-panel", key: "mcp" } as const,
@@ -372,6 +369,37 @@ async function refreshAgentColors($: EngineInterface) {
 const SESSION_PANE = "session";
 /** Wide enough for a subagent row: description, model, tokens, status and cost. */
 const SESSION_PANE_COLUMNS = 96;
+
+/** The pane with the CLAUDE.md and AGENTS.md files in context. */
+const MEMORY_PANE = "memory";
+/** Files whose preview is open in the CLAUDE.md pane. */
+const expandedFilesAtom = atom(
+  { plugin: "status-panel", key: "expandedFiles" } as const,
+  [] as string[],
+);
+/** File text by path, read when its preview opens. */
+const previewsAtom = atom(
+  { plugin: "status-panel", key: "previews" } as const,
+  {} as Record<string, string>,
+);
+
+/** The memory files the panel lists: CLAUDE.md, CLAUDE.local.md and AGENTS.md. */
+const memoryFiles = (mem: readonly MemFile[]) =>
+  mem.filter((f) => /^(claude(\.local)?|agents)\.md$/i.test(baseName(f.path)));
+
+/** Opens or closes a file's preview; opening reads the file again, so the preview is current. */
+async function togglePreview($: EngineInterface, path: string) {
+  const isOpen = (await read($, expandedFilesAtom)).includes(path);
+  await update($, expandedFilesAtom, (paths) =>
+    isOpen ? paths.filter((x) => x !== path) : [...paths, path],
+  );
+  if (isOpen) return;
+  const text = await $.fs.read(path).catch(() => null);
+  await update($, previewsAtom, (all) => ({
+    ...all,
+    [path]: typeof text === "string" ? text : "– the file could not be read",
+  }));
+}
 
 /** The pane with MCP servers and skills, next to the session pane. */
 const TOOLS_PANE = "tools";
@@ -755,8 +783,6 @@ export const register: Register = (on, options) => {
       const { Text } = el;
       const list = renderList(el, {
         open: "session",
-        cwd: (await read($, repoAtom)).cwd,
-        files: [],
         agents: await read($, agentsAtom),
         agentUsage: await read($, agentUsageAtom),
         sessionUsd: snap?.usd ?? 0,
@@ -764,7 +790,6 @@ export const register: Register = (on, options) => {
         frame: await read($, frameAtom),
         tally: await read($, tallyAtom),
         costParts: await read($, costPartsAtom),
-        onOpen: () => undefined,
         columns: e.props.bodyColumns,
         expanded: await read($, expandedAgentsAtom),
         agentColors: await read($, agentColorsAtom),
@@ -793,6 +818,23 @@ export const register: Register = (on, options) => {
       // The session kind always draws a list; the fallback only satisfies the type.
       return list ?? <Text dimColor>No session data yet.</Text>;
     },
+  );
+
+  on("ui.render", { component: "Pane", requestId: MEMORY_PANE }, async ($, e) =>
+    renderMemory($.ui.resolve(e), {
+      columns: e.props.bodyColumns,
+      cwd: (await read($, repoAtom)).cwd,
+      files: memoryFiles(await read($, memAtom)),
+      expanded: await read($, expandedFilesAtom),
+      previews: await read($, previewsAtom),
+      onToggle: async (path: string) => {
+        await togglePreview($, path);
+      },
+      onOpen: async (path: string) => {
+        await openWithOs($, path);
+        $.ui.toast(`Opening ${baseName(path)}`);
+      },
+    }),
   );
 
   on("ui.render", { component: "Pane", requestId: TOOLS_PANE }, async ($, e) =>
@@ -831,7 +873,8 @@ export const register: Register = (on, options) => {
 
         return;
       }
-      await update($, openAtom, (cur) => (cur === kind ? null : kind));
+      // CLAUDE.md and AGENTS.md files open in a pane too.
+      await togglePane($, MEMORY_PANE, "CLAUDE.md");
     };
     // A file in the default app, a folder in the file manager.
     const openPath = async (path: string) => {
@@ -856,19 +899,13 @@ export const register: Register = (on, options) => {
       model: await read($, modelAtom),
       effort: await read($, effortAtom),
       plan: await read($, planAtom),
-      claudeFiles: mem.filter((f) =>
-        /^(claude(\.local)?|agents)\.md$/i.test(baseName(f.path)),
-      ),
+      claudeFiles: memoryFiles(mem),
       mcp: await read($, mcpAtom),
-      agents: await read($, agentsAtom),
-      agentUsage: await read($, agentUsageAtom),
-      open: await read($, openAtom),
       onToggle: toggle,
       onOpen: openPath,
       isWorking: e.props.isWorking,
       frame: await read($, frameAtom),
       showResets: await read($, showResetsAtom),
-      costParts: await read($, costPartsAtom),
       keepAlive: await read($, keepAliveAtom),
       onPull: async () => {
         await pullUpstream($);

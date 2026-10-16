@@ -7,26 +7,26 @@ A Claude Code mod that draws a quiet, framed panel above the prompt with everyth
 **Personal plan (Max 20x) with extra usage switched on:**
 
 ```
-╭──────────────────────────────────────────────────────────────────────────────────╮
-│ www-trainers  main ↓5  PR#1067                         opus-5-5 · high · Max 20x │
-│                                                                                  │
-│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  33%  333k [1M]    5h     13%  38m                      │  ▐▛█▜▌
-│ cache ●  100%  Σ 98%  56:32                 7d     16%  5d4h                     │  ▝▜█▛▘
-│                                            extra  ━━━━━━━── 84%  42.00$ / 50.00$ │
-│ session  11.02$                CLAUDE.md 3   MCP 10                              │
-╰──────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│ www-trainers  main ↓5  PR#1067                                 opus-5-5 · high · Max 20x │
+│                                                                                          │
+│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  33%  638k [1M]             5h     13%  38m                     │
+│ cache ●  100%  Σ 98%  56:32    CLAUDE.md 3   MCP 10  7d     16%  5d4h                    │
+│                                                    extra  ━━━━━━━── 84%  42.00$ / 50.00$ │
+│ session  11.02$                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 **Enterprise with a 250$ monthly budget:** the 5-hour and weekly limits are hidden (Enterprise pays per token); in their place the month's spend: the bar with its percentage, and the amount against the budget on the row below.
 
 ```
-╭──────────────────────────────────────────────────────────────────────────────────╮
-│ repo-x  feature/abc ✓  PR#5541                      opus-5-5 · high · Enterprise │
-│                                                                                  │
-│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  18%  185k [1M]                     month  ━━━━━━── 76% │  ▐▛█▜▌
-│ cache ●  97%  Σ 96%  42:10                                   190.40$ / 250.00$   │  ▝▜█▛▘
-│ session  12.40$                CLAUDE.md 2   MCP 4                               │
-╰──────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────╮
+│ repo-x  feature/abc ✓  PR#5541                              opus-5-5 · high · Enterprise │
+│                                                                                          │
+│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  18%  185k [1M]                             month  ━━━━━━── 76% │
+│ cache ●  97%  Σ 96%  42:10     CLAUDE.md 2   MCP 4                   190.40$ / 250.00$   │
+│ session  12.40$                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 On a personal plan with extra usage switched off (or without a limit) the money row is hidden; the session cost always stays.
@@ -42,14 +42,15 @@ On a personal plan with extra usage switched off (or without a limit) the money 
 - **Money**, under the limits, with the same colour scale (`/login` to another account is picked up within 30 s):
   - personal plan: `extra` usage beyond the subscription against its monthly limit, from your account; hidden while extra usage is off or has no limit,
   - Enterprise: `month`, all spend this calendar month against the account's limit or `budgetUsd`, from your account once it reports it, otherwise estimated from the price list.
-- **Bottom row:** the session cost (always), prepaid `credits` when the account has any, and the **CLAUDE.md** and **MCP** buttons.
+- **CLAUDE.md** and **MCP** on the cache row, under the token count, each open a side pane.
+- **Bottom row:** the session cost (always), prepaid `credits` when the account has any, and what keep-alive has sent and cost.
 - **Clawd:** a mini Claude Code robot, grey at rest, in colour and animated while a turn is running.
 - **Alerts:** the frame turns orange when the cache expired with the context above 35 %, and red above 65 %.
 - **Currency:** amounts carry the sign after the number (`3.71$`, `3.71€`). Account amounts use the currency the account reports; the session cost and price-list estimates are in US dollars, as Claude Code computes them.
 
 ## Side panes
 
-**session** and **MCP** each open a pane docked to the right of the transcript (fullscreen from 110 columns, otherwise above the prompt). Only one is open at a time; click the same button again to close it.
+**session**, **CLAUDE.md** and **MCP** each open a pane docked to the right of the transcript (fullscreen from 110 columns, otherwise above the prompt). Only one is open at a time; click the same button again to close it.
 
 **Session pane:**
 
@@ -73,6 +74,21 @@ On a personal plan with extra usage switched off (or without a limit) the money 
 - Each subagent with its type, model, effort, tokens, status (`✻ running 1m20s` or `✅ 8s`) and estimated cost, in aligned columns.
 - The coloured dot is the `color` from the agent's definition (`~/.claude/agents`, the project's `.claude/agents`; symbolic links are followed). Built-in types have none.
 - Click a subagent to expand its request and response; **clear** drops the finished ones (running ones stay); the summary counts every subagent spawned this session.
+
+**CLAUDE.md pane:** the loaded `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md` files with where they come from and their tokens. Click a file to read it in an indented frame right in the pane (the first 60 lines); `↗ open` opens it in your editor.
+
+```
+  ▾ CLAUDE.md  Project · 5k tok   ↗ open
+      ╭──────────────────────────────────────────────────────────╮
+      │ # www-trainers                                           │
+      │                                                          │
+      │ ## Než začneš                                            │
+      │ - Pracuješ na oblasti NNN: přečti spec.md a design.md.   │
+      │ … 112 more lines · ↗ open shows the whole file           │
+      ╰──────────────────────────────────────────────────────────╯
+
+  ▸ ~/.claude/CLAUDE.md  User · 3k tok   ↗ open
+```
 
 **MCP & skills pane:** MCP servers, then skills, each list with the active ones first and the most called first. Every row has an `ON`/`OFF` switch at the right edge.
 
@@ -142,7 +158,7 @@ claude plugin validate .
 claude plugin test .
 ```
 
-The band is in `hooks/band.tsx`, the session pane in `hooks/lists.tsx`, the MCP & skills pane in `hooks/tools.tsx`, state and hooks in `hooks/register.tsx`, pure helpers (with tests) in `hooks/format.ts`.
+The band is in `hooks/band.tsx`, the session pane in `hooks/lists.tsx`, the CLAUDE.md pane in `hooks/memory.tsx`, the MCP & skills pane in `hooks/tools.tsx`, state and hooks in `hooks/register.tsx`, pure helpers (with tests) in `hooks/format.ts`.
 
 ## License
 

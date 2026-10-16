@@ -133,7 +133,6 @@ declare module "claude-code" {
       miss: Miss;
       repo: Repo;
       mem: MemFile[];
-      open: Kind | null;
       model: string;
       effort: string;
       plan: string;
@@ -152,6 +151,10 @@ declare module "claude-code" {
       agentColors: Record<string, string>;
       /** Subagents spawned this session, the cleared ones included. */
       spawnedAgents: number;
+      /** Files whose preview is open in the CLAUDE.md pane. */
+      expandedFiles: string[];
+      /** File text by path, read when its preview opens. */
+      previews: Record<string, string>;
       /** Skills the session lists. */
       skills: SkillInfo[];
       /** Calls per skill name. */

@@ -5,15 +5,12 @@ import type {
   SubagentInfo,
   SubagentUsage,
   Kind,
-  MemFile,
   Tally,
 } from "../types";
 import {
   agentStatus,
   agentTerminalColor,
-  noLink,
   shortModel,
-  shortPath,
   tokens,
   usd,
 } from "./format";
@@ -23,8 +20,6 @@ const MAX_LABEL = 40;
 
 export type ListProps = {
   open: Kind | null;
-  cwd: string;
-  files: readonly MemFile[];
   agents: readonly SubagentInfo[];
   agentUsage: Readonly<Record<string, SubagentUsage>>;
   sessionUsd: number;
@@ -35,7 +30,6 @@ export type ListProps = {
   /** Session tokens by kind (main thread and subagents). */
   tally: Tally;
   costParts: CostParts;
-  onOpen: (path: string) => void;
   /** Width of the area the list is drawn in, for the separator lines. */
   columns?: number;
   /** Subagents whose request and response are shown. */
@@ -53,32 +47,6 @@ export type ListProps = {
 /** Expanded list below the button row; `null` when nothing is open. */
 export function renderList(el: ElementTable, p: ListProps) {
   const { Box, Button, Text } = el;
-
-  if (p.open === "claude") {
-    return (
-      <Box flexDirection="column" paddingLeft={2}>
-        {p.files.length === 0 ? (
-          <Text dimColor>
-            No {noLink("CLAUDE.md")} or {noLink("AGENTS.md")} in context.
-          </Text>
-        ) : (
-          p.files.map((f) => (
-            <Box key={f.path} columnGap={1}>
-              <Text>▸ {noLink(shortPath(f.path, p.cwd))}</Text>
-              <Text dimColor>
-                {f.type} · {tokens(f.tokens)} tok
-              </Text>
-              <Button
-                key={`o:${f.path}`}
-                label="↗ open"
-                onPress={() => p.onOpen(f.path)}
-              />
-            </Box>
-          ))
-        )}
-      </Box>
-    );
-  }
 
   if (p.open === "session") {
     // A subagent without a spawn record (e.g. started before the mod loaded) has only an id.

@@ -34,7 +34,6 @@ import {
   money as formatMoney,
   yellow,
 } from "./format";
-import { renderList } from "./lists";
 import { renderRobot } from "./robot";
 
 export type BandProps = {
@@ -54,9 +53,6 @@ export type BandProps = {
   /** CLAUDE.md, CLAUDE.local.md and AGENTS.md files in context. */
   claudeFiles: readonly MemFile[];
   mcp: readonly McpServer[];
-  agents: readonly SubagentInfo[];
-  agentUsage: Readonly<Record<string, SubagentUsage>>;
-  open: Kind | null;
   onToggle: (kind: Kind) => void;
   /** Opens a file or folder in the system. */
   onOpen: (path: string) => void;
@@ -67,8 +63,6 @@ export type BandProps = {
   /** Show the absolute reset time next to limits. */
   showResets: boolean;
   onToggleResets: () => void;
-  /** Estimated session cost by token kind. */
-  costParts: CostParts;
   keepAlive: KeepAlive;
   onToggleKeepAlive: () => void;
   /** Fast-forwards the branch to its upstream (`git pull --ff-only`). */
@@ -82,7 +76,7 @@ const MONEY_BAR_CELLS = 8;
 /** Width of a row label (`context`, `cache`) including the gap after it. */
 const LABEL_CELLS = 9;
 /**
- * Column where keep-alive (cache row) and CLAUDE.md (bottom row) start: under the token count
+ * Column where CLAUDE.md (cache row) and keep-alive's spend (bottom row) start: under the token count
  * on the context row (label, bar, a space, the four-cell percentage and two spaces).
  */
 const KEEP_ALIVE_COLUMN = LABEL_CELLS + BAR_CELLS + 1 + 4 + 2;
@@ -255,12 +249,18 @@ export function renderBand(el: ElementTable, p: BandProps) {
                 )}
               </Text>
             </Box>
-            {/* What keep-alive has sent and cost; nothing until its first request. */}
-            {p.keepAlive.pings === 0 ? null : (
-              <Text dimColor>
-                keep-alive {p.keepAlive.pings}× {usd(p.keepAlive.usd)}
-              </Text>
-            )}
+            {/* The side panes start under the token count of the context row. */}
+            <Box columnGap={3}>
+              <Button key="k-claude" plain onPress={() => p.onToggle("claude")}>
+                {/* noLink: the terminal would turn a file name into a link that opens the file. */}
+                <Text underline>{noLink("CLAUDE.md")}</Text>
+                <Text dimColor> {p.claudeFiles.length}</Text>
+              </Button>
+              <Button key="k-mcp" plain onPress={() => p.onToggle("mcp")}>
+                <Text underline>MCP</Text>
+                <Text dimColor> {p.mcp.length}</Text>
+              </Button>
+            </Box>
           </Box>
           {p.miss ? (
             <Text color={orange}>
@@ -326,7 +326,7 @@ export function renderBand(el: ElementTable, p: BandProps) {
       </Box>
 
       <Box>
-        {/* Money on the left, the lists from the keep-alive column on. */}
+        {/* Session cost and credits on the left, keep-alive's spend from the token column on. */}
         <Box width={KEEP_ALIVE_COLUMN} columnGap={3}>
           <Button key="k-session" plain onPress={() => p.onToggle("session")}>
             {/* The same label width as context and cache: the amount sits under their values. */}
@@ -342,33 +342,13 @@ export function renderBand(el: ElementTable, p: BandProps) {
             </Text>
           )}
         </Box>
-        <Box columnGap={3}>
-          <Button key="k-claude" plain onPress={() => p.onToggle("claude")}>
-            {/* noLink: the terminal would turn a file name into a link that opens the file. */}
-            <Text underline>{noLink("CLAUDE.md")}</Text>
-            <Text dimColor> {p.claudeFiles.length}</Text>
-          </Button>
-          <Button key="k-mcp" plain onPress={() => p.onToggle("mcp")}>
-            <Text underline>MCP</Text>
-            <Text dimColor> {p.mcp.length}</Text>
-          </Button>
-        </Box>
+        {/* What keep-alive has sent and cost; nothing until its first request. */}
+        {p.keepAlive.pings === 0 ? null : (
+          <Text dimColor>
+            keep-alive {p.keepAlive.pings}× {usd(p.keepAlive.usd)}
+          </Text>
+        )}
       </Box>
-
-      {renderList(el, {
-        // The session breakdown has its own pane; an older state may still name it here.
-        open: p.open === "session" ? null : p.open,
-        cwd: p.repo.cwd,
-        files: p.claudeFiles,
-        agents: p.agents,
-        agentUsage: p.agentUsage,
-        sessionUsd: p.snap.usd,
-        now: p.now,
-        frame: p.frame,
-        tally: p.tally,
-        costParts: p.costParts,
-        onOpen: p.onOpen,
-      })}
     </Box>
   );
 }

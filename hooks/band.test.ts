@@ -178,15 +178,57 @@ test("a personal plan shows extra usage and credits the account reports", async 
   expect(credits).toBeDefined();
 });
 
-test("pressing CLAUDE.md expands the file list and opens nothing", async ($, on) => {
+test("pressing CLAUDE.md opens its pane and opens no file", async ($, on) => {
   const runs: string[] = [];
+  const opened: string[] = [];
+  on("ui.panes", async () => ({ value: [] }) as never);
+  on("ui.open", async (_$, e) => {
+    opened.push(e.id);
+
+    return { value: { isPlaced: true } } as never;
+  });
   const ui = await mountBand($, on, runs);
   runs.length = 0;
 
   await ui.press({ key: "k-claude" });
 
   expect(runs).toEqual([]);
-  expect(await ui.find({ key: "o:D:/x/CLAUDE.md" })).toBeDefined();
+  expect(opened).toEqual(["memory"]);
+});
+
+test("pressing a file in the CLAUDE.md pane shows its text and opens nothing", async ($, on) => {
+  const runs: string[] = [];
+  const ui = await mountBand(
+    $,
+    on,
+    runs,
+    () => null,
+    undefined,
+    undefined,
+    "# Rules\nAlways write tests first.",
+  );
+  const pane = await $.ui.mount({
+    plugin: "status-panel",
+    surface: "terminal",
+    component: "Pane",
+    requestId: "memory",
+    props: {
+      title: "CLAUDE.md",
+      isFocused: false,
+      bodyColumns: 96,
+      placement: "dock",
+      scroll: { offset: 0, bodyRows: 30 },
+    },
+  } as never);
+  runs.length = 0;
+  const before = await pane.find({ text: /Always write tests first/ });
+
+  await pane.press({ key: "m:D:/x/CLAUDE.md" });
+
+  expect(ui).toBeDefined();
+  expect(before).toBeUndefined();
+  expect(await pane.find({ text: /Always write tests first/ })).toBeDefined();
+  expect(runs).toEqual([]);
 });
 
 test("the reset time of a limit shows only after pressing the limit", async ($, on) => {
