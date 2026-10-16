@@ -7,26 +7,26 @@ A Claude Code mod that draws a quiet, framed panel above the prompt with everyth
 **Personal plan (Max 20x) with extra usage switched on:**
 
 ```
-╭────────────────────────────────────────────────────────────────────────────────╮
-│ www-trainers  main ↓5  PR#1067                       opus-5-5 · high · Max 20x │
-│                                                                                │
-│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  33%  333k [1M]            5h      13%  38m           │
-│ cache ●  100%  Σ 98%  56:32                         7d      16%  5d4h          │
-│                                          extra  ━━━━━━━── 84%  42.00$ / 50.00$ │
-│ session  11.02$                CLAUDE.md 3   MCP 10                            │
-╰────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────╮
+│ www-trainers  main ↓5  PR#1067                               opus-5-5 · high · Max 20x │
+│                                                                                        │
+│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  33%  333k [1M]   5h     13%  38m                       ▐▛█▜▌ │
+│ cache ●  100%  Σ 98%  56:32                7d     16%  5d4h                      ▝▜█▛▘ │
+│                                           extra  ━━━━━━━── 84%  42.00$ / 50.00$        │
+│ session  11.02$                CLAUDE.md 3   MCP 10                                    │
+╰────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-**Enterprise with a 250$ monthly budget:** the 5-hour and weekly limits are hidden (Enterprise pays per token) and the money row shows the month's spend against the budget.
+**Enterprise with a 250$ monthly budget:** the 5-hour and weekly limits are hidden (Enterprise pays per token); in their place the month's spend: the bar with its percentage, and the amount against the budget on the row below.
 
 ```
-╭────────────────────────────────────────────────────────────────────────────────╮
-│ repo-x  feature/abc ✓  PR#5541                    opus-5-5 · high · Enterprise │
-│                                                                                │
-│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  18%  185k [1M]                                       │
-│ cache ●  97%  Σ 96%  42:10              month  ━━━━━━── 76%  190.40$ / 250.00$ │
-│ session  12.40$                CLAUDE.md 2   MCP 4                             │
-╰────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────╮
+│ repo-x  feature/abc ✓  PR#5541                            opus-5-5 · high · Enterprise │
+│                                                                                        │
+│ context  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  18%  185k [1M]                    month  ━━━━━━── 76%  ▐▛█▜▌ │
+│ cache ●  97%  Σ 96%  42:10                                  190.40$ / 250.00$    ▝▜█▛▘ │
+│ session  12.40$                CLAUDE.md 2   MCP 4                                     │
+╰────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 On a personal plan with extra usage switched off (or without a limit) the money row is hidden; the session cost always stays.

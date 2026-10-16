@@ -300,17 +300,21 @@ export function renderBand(el: ElementTable, p: BandProps) {
             ) : null}
             {/* Money under the time limits: both say how much of an allowance is used. */}
             {hasMoneyRow(money) ? (
-              <Text>
-                <Text dimColor>{money.label} </Text>
-                {meter(moneyPercent, MONEY_BAR_CELLS)}
+              // With no limits above it (Enterprise) the amounts go on a row of their own
+              // under the bar, so the block stays narrow; otherwise all on one row.
+              <Box flexDirection={showsLimits ? "row" : "column"}>
+                <Text>
+                  <Text dimColor>{money.label} </Text>
+                  {meter(moneyPercent, MONEY_BAR_CELLS)}
+                  {showsLimits ? <Text>{"  "}</Text> : null}
+                </Text>
                 <Text dimColor>
-                  {"  "}
                   {money.spent === null
                     ? "–"
                     : formatMoney(money.spent, money.currency)}{" "}
                   / {formatMoney(money.limit ?? 0, money.currency)}
                 </Text>
-              </Text>
+              </Box>
             ) : null}
           </Box>
           {renderRobot(el, {

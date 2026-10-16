@@ -474,3 +474,18 @@ test("pressing a skill's switch writes it off to the project's local settings", 
     },
   ]);
 });
+
+test("on Enterprise the spent amount and budget sit on their own row under the bar", async ($, on) => {
+  const claudeJson = JSON.stringify({
+    oauthAccount: {
+      organizationType: "claude_enterprise",
+      organizationUuid: "e",
+    },
+  });
+  const ui = await mountBand($, on, [], () => null, undefined, claudeJson);
+
+  // The bar row ends at the percentage; the amounts are a Text of their own.
+  const amounts = await ui.find({ text: /^0\.00\$ \/ 250\.00\$$/ });
+
+  expect(amounts).toBeDefined();
+});
