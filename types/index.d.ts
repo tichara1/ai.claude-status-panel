@@ -33,7 +33,7 @@ export type Repo = {
 
 export type MemFile = { path: string; type: string; tokens: number };
 
-export type Kind = "claude" | "agents" | "mcp" | "session";
+export type Kind = "claude" | "mcp" | "session";
 
 export type McpServer = {
   server: string;

@@ -1,6 +1,6 @@
 {
   "name": "status-panel",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A framed panel above the prompt showing context, rate limits, session cost against a monthly budget, prompt-cache state with a live TTL countdown, git branch, model/effort/plan, loaded CLAUDE.md/AGENTS.md/MCP, and subagents.",
   "author": { "name": "Radek Tichacek" },
   "license": "MIT",

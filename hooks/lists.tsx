@@ -45,13 +45,13 @@ export type ListProps = {
 export function renderList(el: ElementTable, p: ListProps) {
   const { Box, Button, Text } = el;
 
-  if (p.open === "claude" || p.open === "agents") {
-    const name = p.open === "claude" ? "CLAUDE.md" : "AGENTS.md";
-
+  if (p.open === "claude") {
     return (
       <Box flexDirection="column" paddingLeft={2}>
         {p.files.length === 0 ? (
-          <Text dimColor>No {noLink(name)} in context.</Text>
+          <Text dimColor>
+            No {noLink("CLAUDE.md")} or {noLink("AGENTS.md")} in context.
+          </Text>
         ) : (
           p.files.map((f) => (
             <Box key={f.path} columnGap={1}>

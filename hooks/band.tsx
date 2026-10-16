@@ -52,8 +52,8 @@ export type BandProps = {
   effort: string;
   /** Subscription, e.g. `Max 5x`; empty when unknown. */
   plan: string;
+  /** CLAUDE.md, CLAUDE.local.md and AGENTS.md files in context. */
   claudeFiles: readonly MemFile[];
-  agentsFiles: readonly MemFile[];
   mcp: readonly McpServer[];
   calls: Readonly<Record<string, number>>;
   agents: readonly SubagentInfo[];
@@ -287,11 +287,6 @@ export function renderBand(el: ElementTable, p: BandProps) {
             onPress={() => p.onToggle("claude")}
           />
           <Button
-            key="k-agents"
-            label={`📋 ${noLink("AGENTS.md")} ×${p.agentsFiles.length}`}
-            onPress={() => p.onToggle("agents")}
-          />
-          <Button
             key="k-mcp"
             label={`🔌 MCP ×${p.mcp.length}`}
             onPress={() => p.onToggle("mcp")}
@@ -322,7 +317,7 @@ export function renderBand(el: ElementTable, p: BandProps) {
       {renderList(el, {
         open: p.open,
         cwd: p.repo.cwd,
-        files: p.open === "agents" ? p.agentsFiles : p.claudeFiles,
+        files: p.claudeFiles,
         mcp: p.mcp,
         calls: p.calls,
         agents: p.agents,

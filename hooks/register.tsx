@@ -536,9 +536,8 @@ export const register: Register = (on, options) => {
       effort: await read($, effortAtom),
       plan: await read($, planAtom),
       claudeFiles: mem.filter((f) =>
-        /^claude(\.local)?\.md$/i.test(baseName(f.path)),
+        /^(claude(\.local)?|agents)\.md$/i.test(baseName(f.path)),
       ),
-      agentsFiles: mem.filter((f) => /^agents\.md$/i.test(baseName(f.path))),
       mcp: await read($, mcpAtom),
       calls: await read($, callsAtom),
       agents: await read($, agentsAtom),

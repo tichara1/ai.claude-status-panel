@@ -9,7 +9,7 @@ A Claude Code mod that draws a framed panel above the prompt with everything you
 │ 🧠 ███████░░░░░░░░ 46% 456k/1.0M                     🕔 5h  13% · 38m      ▐▛█▜▌   │
 │ 💰 ━━──────────── $29.80 / $250.00 [session: $29.80] 📅 7d  16% · 5d4h     ▗▟█▙▖ ✻ │
 │ ────────────────────────────────────────────────────────────────────────────────── │
-│ [📄 CLAUDE.md ×2] [📋 AGENTS.md ×0] [🔌 MCP ×10]      💾 100% Σ 97%   ⏳ 19:18      │
+│ [📄 CLAUDE.md ×2] [🔌 MCP ×10]                        💾 100% Σ 97%   ⏳ 19:18      │
 ╰────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -25,7 +25,7 @@ A Claude Code mod that draws a framed panel above the prompt with everything you
   - tokens burned this session with a price-list estimate,
   - every subagent with its type, model, effort, tokens, status (animated `✻ running 1m20s` or `✅ 8s`) and estimated cost, in aligned columns.
 - **Prompt cache:** hit rate of the last request and of the session, plus a live countdown until the cache expires (TTL). A `⚠ cache miss` line explains the most likely cause (idle longer than TTL, model or effort change, compaction, `/clear`) and disappears once the cache is warm again.
-- **Lists:** loaded `CLAUDE.md` / `AGENTS.md` files (with token size and an **open** button) and active MCP servers.
+- **Lists:** loaded `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md` files under one **CLAUDE.md** button (with token size and an **open** button) and active MCP servers.
 - **Clawd:** a mini animated Claude Code robot that works while a turn is running.
 - **Alerts:** the frame turns orange when the cache expired with the context above 35 %, and red when the context is above 65 %.
 
