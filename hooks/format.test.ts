@@ -36,6 +36,16 @@ import {
   scale,
   tokens,
   ttlScale,
+  isKeepAliveDue,
+  money,
+  usd,
+  agentTerminalColor,
+  parseAgentDefinition,
+  sortByUse,
+  disabledFromSettings,
+  toggleInSettings,
+  mcpTag,
+  skillTag,
 } from "./format";
 
 const at = (h: number, m: number) => new Date(2026, 9, 12, h, m).getTime();
@@ -79,11 +89,12 @@ test("countdown formats mm:ss and h:mm:ss", () => {
 });
 
 test("tokens and percentOf", () => {
-  expect([tokens(950), tokens(12_400), tokens(1_200_000)]).toEqual([
-    "950",
-    "12k",
-    "1.2M",
-  ]);
+  expect([
+    tokens(950),
+    tokens(12_400),
+    tokens(1_200_000),
+    tokens(1_000_000),
+  ]).toEqual(["950", "12k", "1.2M", "1M"]);
   expect(percentOf(90, 5, 5)).toBe(90);
   expect(percentOf(0, 0, 0)).toBeNull();
 });
@@ -253,6 +264,7 @@ test("parseAccountSpend converts minor units to dollars", () => {
     limit: 50,
     balance: 7.5,
     isEnabled: true,
+    currency: "USD",
   });
 });
 
@@ -265,7 +277,13 @@ test("parseAccountSpend returns null without a spend block or for broken JSON", 
 
 const personal = { orgId: "p", isUsageBased: false };
 const enterprise = { orgId: "e", isUsageBased: true };
-const spend = { used: 3, limit: 20, balance: 5, isEnabled: true };
+const spend = {
+  used: 3,
+  limit: 20,
+  balance: 5,
+  isEnabled: true,
+  currency: "EUR",
+};
 
 test("moneyLine on a personal plan shows only extra usage from the account", () => {
   expect(moneyLine(personal, spend, 99, 250)).toEqual({
@@ -274,6 +292,7 @@ test("moneyLine on a personal plan shows only extra usage from the account", () 
     limit: 20,
     balance: 5,
     isOff: false,
+    currency: "EUR",
   });
 });
 
@@ -294,6 +313,7 @@ test("moneyLine on Enterprise without account figures uses the local estimate an
     limit: 250,
     balance: null,
     isOff: false,
+    currency: null,
   });
 });
 
@@ -422,4 +442,96 @@ test("parseAzurePullRequest returns null for no pull request or broken output", 
     parseAzurePullRequest("[]", ""),
     parseAzurePullRequest("oops", ""),
   ]).toEqual([null, null]);
+});
+
+test("isKeepAliveDue fires only in the last lead of a live cache with keep-alive on", () => {
+  const ttl = 60 * 60_000;
+  const lead = 60_000;
+  const at = 1_000_000;
+  const due = (isOn: boolean, cacheAt: number, now: number) =>
+    isKeepAliveDue(isOn, cacheAt, ttl, lead, now);
+
+  expect([
+    due(true, at, at + ttl - 90_000),
+    due(true, at, at + ttl - 30_000),
+    due(false, at, at + ttl - 30_000),
+    due(true, 0, ttl - 30_000),
+    due(true, at, at + ttl + 1),
+  ]).toEqual([false, true, false, false, false]);
+});
+
+test("amounts carry their currency sign after the number", () => {
+  expect([
+    usd(3.714),
+    money(3.71, "EUR"),
+    money(3.71, "USD"),
+    money(3.71, null),
+    money(3.71, "CZK"),
+    money(3.71, "CHF"),
+  ]).toEqual(["3.71$", "3.71€", "3.71$", "3.71$", "3.71 Kč", "3.71 CHF"]);
+});
+
+test("parseAgentDefinition reads name and color from the frontmatter", () => {
+  expect([
+    parseAgentDefinition("---\nname: csharp-reviewer\ncolor: blue\n---\nBody"),
+    parseAgentDefinition('---\r\nname: "x"\r\ncolor: purple\r\n---\r\n'),
+    parseAgentDefinition("---\nname: no-color\n---\n"),
+    parseAgentDefinition("no frontmatter"),
+  ]).toEqual([
+    { name: "csharp-reviewer", color: "blue" },
+    { name: "x", color: "purple" },
+    null,
+    null,
+  ]);
+  expect([agentTerminalColor("purple"), agentTerminalColor("Blue")]).toEqual([
+    "magenta",
+    "blue",
+  ]);
+});
+
+test("sortByUse puts the active first, then the most called, then by name", () => {
+  const items = [
+    { name: "b", calls: 1, isOn: true },
+    { name: "off", calls: 9, isOn: false },
+    { name: "a", calls: 1, isOn: true },
+    { name: "top", calls: 5, isOn: true },
+  ];
+
+  expect(sortByUse(items).map((i) => i.name)).toEqual(["top", "a", "b", "off"]);
+});
+
+test("toggleInSettings switches an MCP server and a skill off and on, keeping other keys", () => {
+  const off = toggleInSettings('{"model":"opus"}', "mcp", "restapi", false);
+  const both = toggleInSettings(off, "skill", "spec-write", false);
+
+  expect(disabledFromSettings(both)).toEqual({
+    mcp: ["restapi"],
+    skills: ["spec-write"],
+  });
+  expect(JSON.parse(both ?? "{}").model).toBe("opus");
+  const back = toggleInSettings(
+    toggleInSettings(both, "mcp", "restapi", true),
+    "skill",
+    "spec-write",
+    true,
+  );
+  expect(JSON.parse(back ?? "")).toEqual({ model: "opus" });
+});
+
+test("toggleInSettings writes nothing over a settings file that is not JSON", () => {
+  expect(toggleInSettings("{ oops", "mcp", "x", false)).toBeNull();
+  expect(toggleInSettings(null, "skill", "x", false)).toBe(
+    '{\n  "skillOverrides": {\n    "x": "off"\n  }\n}\n',
+  );
+});
+
+test("mcpTag and skillTag name where a server or skill comes from", () => {
+  expect([
+    mcpTag("plugin_context7_context7"),
+    mcpTag("claude_ai_Claude_Docs"),
+    mcpTag("restapi"),
+    skillTag("built-in"),
+    skillTag("plugin"),
+    skillTag("projectSettings"),
+  ]).toEqual(["plugin", "claude.ai", "", "system", "plugin", ""]);
 });

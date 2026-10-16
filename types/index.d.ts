@@ -35,6 +35,14 @@ export type MemFile = { path: string; type: string; tokens: number };
 
 export type Kind = "claude" | "mcp" | "session";
 
+/** A skill the session lists, from the context breakdown. */
+export type SkillInfo = {
+  name: string;
+  /** Where it comes from (`userSettings`, `plugin`, `built-in`, …). */
+  source: string;
+  tokens: number;
+};
+
 export type McpServer = {
   server: string;
   tools: number;
@@ -48,6 +56,10 @@ export type SubagentInfo = {
   description: string;
   type: string;
   startedAt: number;
+  /** The task it was given; absent in a record from an older version of the mod. */
+  prompt?: string;
+  /** Its final answer, once it finished. */
+  result?: string;
 };
 
 /** Usage of one subagent: tokens and a price estimate from the model price list. */
@@ -82,12 +94,23 @@ export type AccountSpend = {
   balance: number | null;
   /** Extra usage is switched on. */
   isEnabled: boolean;
+  /** ISO code the account bills in (`USD`, `EUR`); `null` when it says none. */
+  currency: string | null;
 };
 
 /** The signed-in organization; an Enterprise seat pays for every request. */
 export type Billing = { orgId: string; isUsageBased: boolean };
 
 /** The money line: `extra` beyond a personal plan, or all of `month` on Enterprise. */
+/** Keeps the prompt cache warm with a tiny request shortly before the TTL runs out. */
+export type KeepAlive = {
+  isOn: boolean;
+  /** Requests sent this session. */
+  pings: number;
+  /** Their estimated cost in USD. */
+  usd: number;
+};
+
 export type Money = {
   label: "extra" | "month";
   /** `null` while unknown. */
@@ -96,6 +119,8 @@ export type Money = {
   balance: number | null;
   /** Extra usage is switched off. */
   isOff: boolean;
+  /** ISO code of the amounts; `null` for US dollars from the price list or the budget. */
+  currency: string | null;
 };
 
 declare module "claude-code" {
@@ -120,8 +145,20 @@ declare module "claude-code" {
       agents: SubagentInfo[];
       agentUsage: Record<string, SubagentUsage>;
       showResets: boolean;
+      keepAlive: KeepAlive;
+      /** Subagents whose request and response are expanded in the session pane. */
+      expandedAgents: string[];
+      /** Agent type → the `color` of its definition, for the dot in the session pane. */
+      agentColors: Record<string, string>;
+      /** Subagents spawned this session, the cleared ones included. */
+      spawnedAgents: number;
+      /** Skills the session lists. */
+      skills: SkillInfo[];
+      /** Calls per skill name. */
+      skillCalls: Record<string, number>;
+      /** MCP servers and skills switched off in the project's local settings. */
+      disabled: { mcp: string[]; skills: string[] };
       costParts: CostParts;
-      version: string;
       frame: number;
     };
   }

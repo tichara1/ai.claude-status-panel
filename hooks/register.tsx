@@ -4,24 +4,33 @@ import type { EngineInterface, Register } from "claude-code";
 import type {
   AccountSpend,
   Billing,
+  KeepAlive,
   Kind,
   McpServer,
   MemFile,
   Miss,
   PullRequest,
   Repo,
+  SkillInfo,
   Snap,
   SubagentInfo,
   SubagentUsage,
   Tally,
 } from "../types";
 import { renderBand } from "./band";
+import type { Disabled } from "./format";
+import { renderList } from "./lists";
+import { renderTools } from "./tools";
 import {
   addAgentStep,
   baseName,
   effortShort,
   emptyAgent,
   groupMcp,
+  disabledFromSettings,
+  toggleInSettings,
+  parseAgentDefinition,
+  isKeepAliveDue,
   missReason,
   moneyLine,
   monthKey,
@@ -81,6 +90,59 @@ const callsAtom = atom(
   { plugin: "status-panel", key: "calls" } as const,
   {} as Record<string, number>,
 );
+const skillsAtom = atom(
+  { plugin: "status-panel", key: "skills" } as const,
+  [] as SkillInfo[],
+);
+const skillCallsAtom = atom(
+  { plugin: "status-panel", key: "skillCalls" } as const,
+  {} as Record<string, number>,
+);
+/** MCP servers and skills switched off in the project's .claude/settings.local.json. */
+const disabledAtom = atom(
+  { plugin: "status-panel", key: "disabled" } as const,
+  { mcp: [], skills: [] } as Disabled,
+);
+/** Where the switches are written: personal, not committed, as `/skills` writes it. */
+const LOCAL_SETTINGS = ".claude/settings.local.json";
+
+/** The project's local settings text; `null` when there is no such file yet. */
+async function readLocalSettings($: EngineInterface) {
+  const cwd = await $.session.cwd();
+  const text = await $.fs.read(`${cwd}/${LOCAL_SETTINGS}`).catch(() => null);
+
+  return typeof text === "string" ? text : null;
+}
+
+/**
+ * Switches an MCP server (`deniedMcpServers`) or a skill (`skillOverrides`) on or off in the
+ * project's local settings. A file that is no JSON is left as it is and the toast says so.
+ */
+async function switchInSettings(
+  $: EngineInterface,
+  kind: "mcp" | "skill",
+  name: string,
+) {
+  const text = await readLocalSettings($);
+  const isOff =
+    disabledFromSettings(text)[kind === "mcp" ? "mcp" : "skills"].includes(
+      name,
+    );
+  const next = toggleInSettings(text, kind, name, isOff);
+  if (next === null) {
+    $.ui.toast(`${LOCAL_SETTINGS} is not valid JSON: nothing written`);
+
+    return;
+  }
+  const cwd = await $.session.cwd();
+  await $.fs.write(`${cwd}/${LOCAL_SETTINGS}`, next);
+  await update($, disabledAtom, () => disabledFromSettings(next));
+  $.ui.toast(
+    kind === "mcp"
+      ? `MCP ${name} ${isOff ? "on" : "off"}: applies when it reconnects (/mcp or a new session)`
+      : `Skill ${name} ${isOff ? "on" : "off"}`,
+  );
+}
 const modelAtom = atom({ plugin: "status-panel", key: "model" } as const, "");
 const effortAtom = atom(
   { plugin: "status-panel", key: "effort" } as const,
@@ -112,6 +174,14 @@ const showResetsAtom = atom(
   { plugin: "status-panel", key: "showResets" } as const,
   false,
 );
+const keepAliveAtom = atom(
+  { plugin: "status-panel", key: "keepAlive" } as const,
+  { isOn: false, pings: 0, usd: 0 } as KeepAlive,
+);
+/** How long before the cache expires the keep-alive request goes out. */
+const KEEP_ALIVE_LEAD_MS = 60_000;
+/** The keep-alive request: the shortest question with the shortest answer. */
+const KEEP_ALIVE_PROMPT = "Reply with the single word: ok";
 /** Estimated session cost by token kind (main thread and subagents). */
 const costPartsAtom = atom(
   { plugin: "status-panel", key: "costParts" } as const,
@@ -122,10 +192,46 @@ const costPartsAtom = atom(
     write: 0,
   },
 );
-const versionAtom = atom(
-  { plugin: "status-panel", key: "version" } as const,
-  "",
-);
+
+/**
+ * With keep-alive on, sends one tiny request over the session's own transcript shortly before
+ * the cache expires, so the API reads the prefix from the cache and its TTL starts again.
+ * Not once the cache expired: the request would write the whole context again.
+ * A failed request switches keep-alive off.
+ */
+async function keepCacheAlive(
+  $: EngineInterface,
+  now: number,
+  ttlMs: number,
+  ttlMinutes: number,
+) {
+  const keep = await read($, keepAliveAtom);
+  const cacheAt = await read($, cacheAtAtom);
+  if (!isKeepAliveDue(keep.isOn, cacheAt, ttlMs, KEEP_ALIVE_LEAD_MS, now)) {
+    return;
+  }
+  const r = await $.model.fork({ prompt: KEEP_ALIVE_PROMPT });
+  const usage = "usage" in r ? r.usage : null;
+  const cost =
+    usage === null
+      ? 0
+      : (stepCost(await read($, modelAtom), usage, ttlMinutes) ?? 0);
+  await update($, keepAliveAtom, (k) => ({
+    ...k,
+    isOn: r.isAnswered && k.isOn,
+    pings: k.pings + 1,
+    usd: k.usd + cost,
+  }));
+  if (!r.isAnswered) {
+    $.ui.toast(`keep-alive off: ${r.reason}`);
+  } else if (
+    r.usage.cache_read_input_tokens + r.usage.cache_creation_input_tokens >
+    0
+  ) {
+    const doneAt = await $.clock.now();
+    await update($, cacheAtAtom, () => doneAt);
+  }
+}
 
 /** Opens a path with the OS opener: `start` on Windows, `open` on macOS, `xdg-open` elsewhere. */
 async function openWithOs($: EngineInterface, path: string) {
@@ -217,6 +323,106 @@ async function refreshRepo($: EngineInterface) {
   await update($, repoAtom, () => ({ cwd, branch, sync, pr }));
 }
 
+/** Subagents spawned this session, the cleared ones included. */
+const spawnedAgentsAtom = atom(
+  { plugin: "status-panel", key: "spawnedAgents" } as const,
+  0,
+);
+/** Subagents whose request and response are expanded in the session pane. */
+const expandedAgentsAtom = atom(
+  { plugin: "status-panel", key: "expandedAgents" } as const,
+  [] as string[],
+);
+/** Longest response kept per subagent; the pane is for a look, the transcript has the rest. */
+const MAX_AGENT_TEXT = 20_000;
+
+/** Agent type → the `color` of its definition (user's, then the project's, which wins). */
+const agentColorsAtom = atom(
+  { plugin: "status-panel", key: "agentColors" } as const,
+  {} as Record<string, string>,
+);
+
+/** Reads the colors of the agent definitions in ~/.claude/agents and the project's .claude/agents. */
+async function refreshAgentColors($: EngineInterface) {
+  const configDir = await $.env.get("CLAUDE_CONFIG_DIR");
+  const home = (await $.env.get("USERPROFILE")) ?? (await $.env.get("HOME"));
+  const userDir =
+    configDir ?? (home === undefined ? undefined : `${home}/.claude`);
+  const cwd = await $.session.cwd();
+  const dirs = [
+    ...(userDir === undefined ? [] : [`${userDir}/agents`]),
+    `${cwd}/.claude/agents`,
+  ];
+  const colors: Record<string, string> = {};
+  for (const dir of dirs) {
+    // A missing folder just has no agents.
+    const entries = await $.fs.list(dir).catch(() => []);
+    for (const f of entries) {
+      // A symbolic link is listed as `other`: read it too, the read follows it.
+      if (f.kind === "dir" || !f.name.endsWith(".md")) continue;
+      const text = await $.fs.read(`${dir}/${f.name}`).catch(() => null);
+      const def = typeof text === "string" ? parseAgentDefinition(text) : null;
+      if (def !== null) colors[def.name] = def.color;
+    }
+  }
+  await update($, agentColorsAtom, () => colors);
+}
+
+/** The pane with the session's tokens and subagents, docked beside the transcript in fullscreen. */
+const SESSION_PANE = "session";
+/** Wide enough for a subagent row: description, model, tokens, status and cost. */
+const SESSION_PANE_COLUMNS = 96;
+
+/** The pane with MCP servers and skills, next to the session pane. */
+const TOOLS_PANE = "tools";
+
+/**
+ * Opens a pane by id, or closes it when it is already up. Only one of this mod's panes is up
+ * at a time: opening one closes the other, so closing it never leaves the other behind.
+ */
+async function togglePane($: EngineInterface, id: string, title: string) {
+  const up = (await $.ui.panes()).map((pane) => pane.id);
+  if (up.includes(id)) {
+    await $.ui.close({ id });
+
+    return;
+  }
+  for (const other of up) await $.ui.close({ id: other });
+  const opened = await $.ui.open({ id, title, columns: SESSION_PANE_COLUMNS });
+  if (!opened.isPlaced) $.ui.toast(`${title} pane: ${opened.reason}`);
+}
+
+/** A pull is on its way; another click waits for it rather than starting a second one. */
+let isPulling = false;
+
+/**
+ * Brings the branch level with its upstream: `git pull --ff-only` moves it forward and never
+ * merges, so a diverged branch or local changes in the way leave everything as it was and the
+ * toast says why.
+ */
+async function pullUpstream($: EngineInterface) {
+  if (isPulling) return;
+  isPulling = true;
+  try {
+    const cwd = await $.session.cwd();
+    $.ui.toast("git pull --ff-only…");
+    const r = await $.process
+      .run(["git", "pull", "--ff-only"], { cwd })
+      .catch(() => null);
+    const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
+    $.ui.toast(
+      r === null
+        ? "git pull: git did not run"
+        : r.exitCode === 0
+          ? "Pulled: up to date with upstream"
+          : `git pull failed: ${firstLine(r.stderr) || firstLine(r.stdout)}`,
+    );
+    await refreshRepo($);
+  } finally {
+    isPulling = false;
+  }
+}
+
 async function refreshContext($: EngineInterface) {
   const b = (await $.session.usage({ breakdown: "summary" })).context.breakdown;
   const model = b?.model ?? "";
@@ -229,6 +435,14 @@ async function refreshContext($: EngineInterface) {
   await update($, memAtom, () => files);
   const servers = groupMcp(b?.mcpTools ?? []);
   await update($, mcpAtom, () => servers);
+  const skills = (b?.skills?.skillFrontmatter ?? []).map((s) => ({
+    name: s.name,
+    source: String(s.source),
+    tokens: s.tokens,
+  }));
+  await update($, skillsAtom, () => skills);
+  const local = await readLocalSettings($);
+  await update($, disabledAtom, () => disabledFromSettings(local));
 }
 
 async function refreshPlan($: EngineInterface) {
@@ -322,6 +536,8 @@ export const register: Register = (on, options) => {
   let isCompacted = false;
   let ticks = 0;
   let isWorking = false;
+  /** A keep-alive request is on its way; the next tick does not send another. */
+  let isPinging = false;
   /** Subagents that sent a request and whose turn has not ended yet. */
   const runningAgents = new Set<string>();
 
@@ -340,8 +556,7 @@ export const register: Register = (on, options) => {
     await refreshRepo($);
     await refreshContext($);
     await refreshAccount($);
-    const { version } = await $.session.version();
-    await update($, versionAtom, () => version);
+    await refreshAgentColors($);
     $.clock.every(250, async () => {
       // The animation (Clawd, asterisks of running subagents) runs while anyone is working.
       if (isWorking || runningAgents.size > 0) {
@@ -359,6 +574,15 @@ export const register: Register = (on, options) => {
         await refreshPlan($);
       }
       if (ticks % 120 === 0) await refreshAccount($);
+      // Not while a turn runs (the turn refreshes the cache itself) or a request is on its way.
+      if (!isWorking && !isPinging) {
+        isPinging = true;
+        try {
+          await keepCacheAlive($, tickAt, ttlMs, ttlMinutes);
+        } finally {
+          isPinging = false;
+        }
+      }
     });
 
     return next(e);
@@ -389,8 +613,16 @@ export const register: Register = (on, options) => {
     }
     await refreshRepo($);
     await refreshContext($);
+    const r = await next(e);
+    // A subagent's last answer is its response; the session pane shows it under its request.
+    if (agentId !== undefined && r.text !== "") {
+      const result = r.text.slice(0, MAX_AGENT_TEXT);
+      await update($, agentsAtom, (list) =>
+        list.map((a) => (a.id === agentId ? { ...a, result } : a)),
+      );
+    }
 
-    return next(e);
+    return r;
   });
 
   on("tool.call", async ($, e, next) => {
@@ -398,6 +630,13 @@ export const register: Register = (on, options) => {
       ...c,
       [e.tool]: (c[e.tool] ?? 0) + 1,
     }));
+    if (e.tool === "Skill") {
+      const name = e.skill;
+      await update($, skillCallsAtom, (c) => ({
+        ...c,
+        [name]: (c[name] ?? 0) + 1,
+      }));
+    }
 
     return next(e);
   });
@@ -410,6 +649,8 @@ export const register: Register = (on, options) => {
 
   on("agent.spawn", async ($, e, next) => {
     const startedAt = await $.clock.now();
+    // An agent defined or recoloured since the session started gets its colour too.
+    await refreshAgentColors($);
     const r = await next(e);
     const id = r.agentId;
     if (id !== undefined) {
@@ -418,11 +659,13 @@ export const register: Register = (on, options) => {
         description: e.description,
         type: e.subagentType,
         startedAt,
+        prompt: e.prompt,
       };
       await update($, agentsAtom, (list) => [
         ...list.filter((a) => a.id !== id),
         info,
       ]);
+      await update($, spawnedAgentsAtom, (n) => n + 1);
     }
 
     return r;
@@ -503,12 +746,91 @@ export const register: Register = (on, options) => {
     return r;
   });
 
+  on(
+    "ui.render",
+    { component: "Pane", requestId: SESSION_PANE },
+    async ($, e) => {
+      const snap = await read($, snapAtom);
+      const el = $.ui.resolve(e);
+      const { Text } = el;
+      const list = renderList(el, {
+        open: "session",
+        cwd: (await read($, repoAtom)).cwd,
+        files: [],
+        agents: await read($, agentsAtom),
+        agentUsage: await read($, agentUsageAtom),
+        sessionUsd: snap?.usd ?? 0,
+        now: await read($, nowAtom),
+        frame: await read($, frameAtom),
+        tally: await read($, tallyAtom),
+        costParts: await read($, costPartsAtom),
+        onOpen: () => undefined,
+        columns: e.props.bodyColumns,
+        expanded: await read($, expandedAgentsAtom),
+        agentColors: await read($, agentColorsAtom),
+        spawnedAgents: await read($, spawnedAgentsAtom),
+        onToggleAgent: async (id: string) => {
+          await update($, expandedAgentsAtom, (ids) =>
+            ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
+          );
+        },
+        onClearAgents: async () => {
+          // Running subagents stay, so their live status is not lost.
+          const usage = await read($, agentUsageAtom);
+          const isRunning = (id: string) => usage[id]?.isDone !== true;
+          await update($, agentsAtom, (list) =>
+            list.filter((a) => isRunning(a.id)),
+          );
+          await update($, agentUsageAtom, (all) =>
+            Object.fromEntries(
+              Object.entries(all).filter(([id]) => isRunning(id)),
+            ),
+          );
+          await update($, expandedAgentsAtom, (ids) => ids.filter(isRunning));
+        },
+      });
+
+      // The session kind always draws a list; the fallback only satisfies the type.
+      return list ?? <Text dimColor>No session data yet.</Text>;
+    },
+  );
+
+  on("ui.render", { component: "Pane", requestId: TOOLS_PANE }, async ($, e) =>
+    renderTools($.ui.resolve(e), {
+      columns: e.props.bodyColumns,
+      mcp: await read($, mcpAtom),
+      calls: await read($, callsAtom),
+      skills: await read($, skillsAtom),
+      skillCalls: await read($, skillCallsAtom),
+      disabledMcp: (await read($, disabledAtom)).mcp,
+      disabledSkills: (await read($, disabledAtom)).skills,
+      onToggleMcp: async (server: string) => {
+        await switchInSettings($, "mcp", server);
+      },
+      onToggleSkill: async (skill: string) => {
+        await switchInSettings($, "skill", skill);
+      },
+    }),
+  );
+
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     const snap = await read($, snapAtom);
     if (e.props.hasSurvey || snap === null) return next(e);
 
     const mem = await read($, memAtom);
     const toggle = async (kind: Kind) => {
+      // The session breakdown is long: it opens in its own pane, not in the band.
+      if (kind === "session") {
+        await togglePane($, SESSION_PANE, "Session");
+
+        return;
+      }
+      // MCP servers and skills open in a pane of their own as well.
+      if (kind === "mcp") {
+        await togglePane($, TOOLS_PANE, "MCP & skills");
+
+        return;
+      }
       await update($, openAtom, (cur) => (cur === kind ? null : kind));
     };
     // A file in the default app, a folder in the file manager.
@@ -518,7 +840,6 @@ export const register: Register = (on, options) => {
     };
 
     return renderBand($.ui.resolve(e), {
-      columns: e.props.bodyColumns,
       now: await read($, nowAtom),
       ttlMs,
       snap,
@@ -539,7 +860,6 @@ export const register: Register = (on, options) => {
         /^(claude(\.local)?|agents)\.md$/i.test(baseName(f.path)),
       ),
       mcp: await read($, mcpAtom),
-      calls: await read($, callsAtom),
       agents: await read($, agentsAtom),
       agentUsage: await read($, agentUsageAtom),
       open: await read($, openAtom),
@@ -549,7 +869,13 @@ export const register: Register = (on, options) => {
       frame: await read($, frameAtom),
       showResets: await read($, showResetsAtom),
       costParts: await read($, costPartsAtom),
-      version: await read($, versionAtom),
+      keepAlive: await read($, keepAliveAtom),
+      onPull: async () => {
+        await pullUpstream($);
+      },
+      onToggleKeepAlive: async () => {
+        await update($, keepAliveAtom, (k) => ({ ...k, isOn: !k.isOn }));
+      },
       onToggleResets: async () => {
         await update($, showResetsAtom, (shown) => !shown);
       },

@@ -4,6 +4,7 @@ import type {
   CostParts,
   SubagentInfo,
   SubagentUsage,
+  KeepAlive,
   Kind,
   McpServer,
   MemFile,
@@ -14,7 +15,6 @@ import type {
   Tally,
 } from "../types";
 import {
-  bar,
   baseName,
   clock,
   countdown,
@@ -31,14 +31,13 @@ import {
   tokens,
   ttlScale,
   usd,
+  money as formatMoney,
   yellow,
 } from "./format";
 import { renderList } from "./lists";
 import { renderRobot } from "./robot";
 
 export type BandProps = {
-  /** Band width in cells (`e.props.bodyColumns`). */
-  columns: number;
   now: number;
   ttlMs: number;
   snap: Snap;
@@ -55,7 +54,6 @@ export type BandProps = {
   /** CLAUDE.md, CLAUDE.local.md and AGENTS.md files in context. */
   claudeFiles: readonly MemFile[];
   mcp: readonly McpServer[];
-  calls: Readonly<Record<string, number>>;
   agents: readonly SubagentInfo[];
   agentUsage: Readonly<Record<string, SubagentUsage>>;
   open: Kind | null;
@@ -71,28 +69,28 @@ export type BandProps = {
   onToggleResets: () => void;
   /** Estimated session cost by token kind. */
   costParts: CostParts;
-  /** Claude Code version. */
-  version: string;
+  keepAlive: KeepAlive;
+  onToggleKeepAlive: () => void;
+  /** Fast-forwards the branch to its upstream (`git pull --ff-only`). */
+  onPull: () => void;
 };
 
-/** Context bar half again as wide as the default 10 cells. */
-const CTX_CELLS = 15;
+/** Width of the context and money bars in cells. */
+const BAR_CELLS = 15;
+/** The money bar sits beside the short time limits: a shorter bar keeps that column narrow. */
+const MONEY_BAR_CELLS = 8;
+/** Width of a row label (`context`, `cache`) including the gap after it. */
+const LABEL_CELLS = 9;
+/**
+ * Column where keep-alive (cache row) and CLAUDE.md (bottom row) start: under the token count
+ * on the context row (label, bar, a space, the four-cell percentage and two spaces).
+ */
+const KEEP_ALIVE_COLUMN = LABEL_CELLS + BAR_CELLS + 1 + 4 + 2;
 /** Width of the relative time (`1.5h`, `45m`) including a space so absolute times line up. */
 const REL_CELLS = 6;
-/**
- * Widths of the right block (limits with robot, cache) in cells. Both blocks have the same
- * width and sit at the right edge, so they start in the same column: the cache icon is below
- * the limit icons. The width matches the content exactly so no empty space is left on the right.
- */
-// `🕔 5h 100% · ` (13) + relative time (REL_CELLS)
-const LIMIT_CELLS = 13 + REL_CELLS;
-// `[Mon 12.10. 08:00]` (18) + space, only when reset times are visible
-const RESET_CELLS = 19;
-// gap between limits and robot (3) + mini Clawd with a space and spinner (7)
-const ROBOT_CELLS = 3 + 7;
-/** Above this context fill a cold cache is expensive: the band turns red. */
+/** Above this context fill a cold cache is expensive: the frame turns orange. */
 const ALERT_CTX_PERCENT = 35;
-/** Above this context fill the band always turns red, even with an active cache. */
+/** Above this context fill the frame always turns red, even with an active cache. */
 const FULL_CTX_PERCENT = 65;
 /** Calm: no background, border in the theme's muted color. */
 const CALM = { background: undefined, border: "subtle", style: "round" };
@@ -105,11 +103,13 @@ const hitColor = (hit: number) =>
 const resetsAtMs = (resetsAt?: string) =>
   resetsAt ? Date.parse(resetsAt) : null;
 
-/** The whole band above the prompt in a frame: header, context, money, buttons and the expanded list. */
+/** The money row shows only with a known limit and extra usage not switched off. */
+export const hasMoneyRow = (money: Money) =>
+  money.limit !== null && !money.isOff;
+
+/** The whole band above the prompt in a quiet frame: header, meters with limits, links and the expanded list. */
 export function renderBand(el: ElementTable, p: BandProps) {
   const { Box, Button, Link, Text } = el;
-  // The frame takes 2 cells, the padding another 2.
-  const divider = "─".repeat(Math.max(0, p.columns - 4));
 
   const five = p.snap.limits.find((l) => l.kind === "five_hour");
   const week = p.snap.limits.find((l) => l.kind === "seven_day");
@@ -128,12 +128,38 @@ export function renderBand(el: ElementTable, p: BandProps) {
   const sum = p.tally.read + p.tally.write + p.tally.input;
   const sessionHit = sum === 0 ? null : Math.round((p.tally.read / sum) * 100);
   const { money } = p;
+  // Usage-based billing (Enterprise) pays per token: the 5h and 7d windows say nothing there.
+  const showsLimits = money.label !== "month";
   const moneyPercent =
     money.spent !== null && money.limit !== null && money.limit > 0
       ? (money.spent / money.limit) * 100
       : 0;
-  const rightCells =
-    LIMIT_CELLS + (p.showResets ? RESET_CELLS : 0) + ROBOT_CELLS;
+
+  /** A row label, dim and padded so the bars start in one column. */
+  const label = (text: string) => (
+    <Text dimColor>{text.padEnd(LABEL_CELLS)}</Text>
+  );
+  /** A thin bar and its percentage, both in the fill's color. */
+  const meter = (percent: number, cells = BAR_CELLS, isTall = false) => {
+    const thin = thinBar(percent, cells);
+    // The tall bar draws the same cells as ▬, a block centred in the row (the eighth blocks
+    // ▁–▇ grow from the bottom and sit low); the empty part keeps the height, only dim.
+    const filled = isTall ? thin.filled.replaceAll("━", "▬") : thin.filled;
+    const empty = isTall ? thin.empty.replaceAll("─", "▬") : thin.empty;
+
+    return (
+      <Text>
+        <Text color={scale(percent)}>{filled}</Text>
+        <Text dimColor>{empty}</Text>
+        <Text color={scale(percent)}> {percentCell(percent)}</Text>
+      </Text>
+    );
+  };
+  const header = [
+    p.model === "" ? "–" : shortModel(p.model),
+    p.effort,
+    p.plan,
+  ].filter((part) => part !== "");
 
   return (
     <Box
@@ -143,131 +169,148 @@ export function renderBand(el: ElementTable, p: BandProps) {
       backgroundColor={theme.background}
       paddingX={1}
     >
-      <Box justifyContent="space-between">
+      <Box justifyContent="space-between" columnGap={4}>
         <Box columnGap={2}>
-          <Button
-            key="k-folder"
-            label={`📁 ${baseName(p.repo.cwd)}`}
-            onPress={() => p.onOpen(p.repo.cwd)}
-          />
+          <Button key="k-folder" plain onPress={() => p.onOpen(p.repo.cwd)}>
+            <Text bold underline>
+              {baseName(p.repo.cwd)}
+            </Text>
+          </Button>
           {p.repo.branch ? (
-            <Text>
-              <Text dimColor>git:</Text>
-              <Text color={green}>{p.repo.branch}</Text>
+            <Box>
+              <Text>
+                <Text color={green}>{p.repo.branch}</Text>
+                {p.repo.sync === null ? null : p.repo.sync.ahead === 0 &&
+                  p.repo.sync.behind === 0 ? (
+                  <Text dimColor> ✓</Text>
+                ) : p.repo.sync.ahead > 0 ? (
+                  <Text color={green}> ↑{p.repo.sync.ahead}</Text>
+                ) : null}{" "}
+              </Text>
+              {/* Behind upstream: a click fast-forwards the branch. */}
+              {p.repo.sync !== null && p.repo.sync.behind > 0 ? (
+                <Button key="k-pull" plain onPress={p.onPull}>
+                  <Text color={orange} underline>
+                    ↓{p.repo.sync.behind}
+                  </Text>
+                </Button>
+              ) : null}
               {p.repo.pr ? (
                 <Text>
-                  {" "}
-                  <Link
-                    href={p.repo.pr.url}
-                    label={`[PR#${p.repo.pr.number}]`}
-                  />
+                  {"  "}
+                  <Link href={p.repo.pr.url} label={`PR#${p.repo.pr.number}`} />
                 </Text>
               ) : null}
-              {p.repo.sync === null ? null : p.repo.sync.ahead === 0 &&
-                p.repo.sync.behind === 0 ? (
-                <Text dimColor> ✓</Text>
-              ) : (
-                <Text>
-                  {p.repo.sync.ahead > 0 ? (
-                    <Text color={green}> ↑{p.repo.sync.ahead}</Text>
-                  ) : null}
-                  {p.repo.sync.behind > 0 ? (
-                    <Text color={orange}> ↓{p.repo.sync.behind}</Text>
-                  ) : null}
-                </Text>
-              )}
-            </Text>
+            </Box>
           ) : null}
         </Box>
-        <Box columnGap={3}>
-          <Text>
-            🤖 <Text bold>{p.model === "" ? "–" : shortModel(p.model)}</Text>
-            <Text dimColor> (</Text>
-            {p.effort}
-            <Text dimColor>)</Text>
-          </Text>
-          {p.plan === "" ? null : (
-            <Text>
-              👑 <Text bold>{p.plan}</Text>
-            </Text>
-          )}
-          {p.version === "" ? null : <Text dimColor>v{p.version}</Text>}
-        </Box>
+        <Text dimColor>{header.join(" · ")}</Text>
       </Box>
-      <Text dimColor>{divider}</Text>
+      <Text> </Text>
 
       <Box justifyContent="space-between" flexWrap="wrap" columnGap={3}>
         <Box flexDirection="column">
           <Text>
-            🧠{" "}
-            <Text color={scale(p.snap.ctxPercent)}>
-              {bar(p.snap.ctxPercent, CTX_CELLS)}{" "}
-              {Math.round(p.snap.ctxPercent)}%
-            </Text>
+            {label("context")}
+            {meter(p.snap.ctxPercent, BAR_CELLS, true)}
             <Text dimColor>
-              {" "}
-              {tokens(p.snap.ctxTokens)}/{tokens(p.snap.ctxWindow)}
+              {"  "}
+              {tokens(p.snap.ctxTokens)} [{tokens(p.snap.ctxWindow)}]
             </Text>
           </Text>
-          <Box columnGap={1}>
-            <Text>
-              💰{" "}
-              <Text color={scale(moneyPercent)} dimColor>
-                {thinBar(moneyPercent, CTX_CELLS).filled}
-              </Text>
-              <Text dimColor>{thinBar(moneyPercent, CTX_CELLS).empty} </Text>
-              <Text dimColor>{money.label} </Text>
-              <Text bold>{money.spent === null ? "–" : usd(money.spent)}</Text>
-              {money.limit === null ? null : (
-                <Text dimColor> / {usd(money.limit)}</Text>
-              )}
-              {money.isOff ? <Text dimColor> (off)</Text> : null}
-              {money.balance === null ? null : (
-                <Text>
-                  {"  "}💳 <Text bold>{usd(money.balance)}</Text>
+          <Box>
+            <Box width={KEEP_ALIVE_COLUMN}>
+              {/* The word cache switches keep-alive: a tiny request shortly before the TTL
+                  runs out keeps the cache warm. The dot is green while it is on. */}
+              <Button key="k-keep" plain onPress={p.onToggleKeepAlive}>
+                <Text dimColor underline>
+                  cache
                 </Text>
-              )}
-            </Text>
-            <Button
-              key="k-session"
-              label={`session: ${usd(p.snap.usd)}`}
-              onPress={() => p.onToggle("session")}
-            />
+                {p.keepAlive.isOn ? (
+                  <Text color={green}> ●</Text>
+                ) : (
+                  <Text dimColor> ●</Text>
+                )}
+                <Text>{" ".repeat(LABEL_CELLS - "cache ●".length)}</Text>
+              </Button>
+              <Text>
+                {p.tally.lastHit === null ? (
+                  <Text dimColor>–</Text>
+                ) : (
+                  <Text color={hitColor(p.tally.lastHit)}>
+                    {p.tally.lastHit}%
+                  </Text>
+                )}
+                <Text dimColor>
+                  {"  "}Σ {sessionHit ?? "–"}%{"  "}
+                </Text>
+                {p.cacheAt === 0 ? (
+                  <Text dimColor>–</Text>
+                ) : left > 0 ? (
+                  <Text color={ttlScale(left, p.ttlMs)}>{countdown(left)}</Text>
+                ) : (
+                  <Text bold color={red}>
+                    expired
+                  </Text>
+                )}
+              </Text>
+            </Box>
+            {/* What keep-alive has sent and cost; nothing until its first request. */}
+            {p.keepAlive.pings === 0 ? null : (
+              <Text dimColor>
+                keep-alive {p.keepAlive.pings}× {usd(p.keepAlive.usd)}
+              </Text>
+            )}
           </Box>
           {p.miss ? (
             <Text color={orange}>
-              ⚠ cache miss {clock(p.miss.at)} · {p.miss.reason}
+              {" ".repeat(LABEL_CELLS)}cache miss {clock(p.miss.at)} ·{" "}
+              {p.miss.reason}
             </Text>
           ) : null}
         </Box>
-        <Box columnGap={3} width={rightCells}>
+        <Box columnGap={3}>
           {/* Clicking a limit shows or hides when the windows reset. */}
           <Box flexDirection="column">
-            {five ? (
+            {showsLimits && five ? (
               <Button key="k-5h" plain onPress={p.onToggleResets}>
-                🕔 <Text dimColor>5h </Text>
+                <Text dimColor>5h </Text>
                 <Text color={scale(five.percentUsed)}>
                   {percentCell(five.percentUsed)}
                 </Text>
                 <Text dimColor>
-                  {" "}
-                  · {(fiveAt ? relIn(fiveAt, p.now) : "").padEnd(REL_CELLS)}
+                  {"  "}
+                  {(fiveAt ? relIn(fiveAt, p.now) : "").padEnd(REL_CELLS)}
                   {p.showResets && fiveAt ? `[${clock(fiveAt)}]` : ""}
                 </Text>
               </Button>
             ) : null}
-            {week ? (
+            {showsLimits && week ? (
               <Button key="k-7d" plain onPress={p.onToggleResets}>
-                📅 <Text dimColor>7d </Text>
+                <Text dimColor>7d </Text>
                 <Text color={scale(week.percentUsed)}>
                   {percentCell(week.percentUsed)}
                 </Text>
                 <Text dimColor>
-                  {" "}
-                  · {(weekAt ? relIn(weekAt, p.now) : "").padEnd(REL_CELLS)}
+                  {"  "}
+                  {(weekAt ? relIn(weekAt, p.now) : "").padEnd(REL_CELLS)}
                   {p.showResets && weekAt ? resetAt(weekAt) : ""}
                 </Text>
               </Button>
+            ) : null}
+            {/* Money under the time limits: both say how much of an allowance is used. */}
+            {hasMoneyRow(money) ? (
+              <Text>
+                <Text dimColor>{money.label} </Text>
+                {meter(moneyPercent, MONEY_BAR_CELLS)}
+                <Text dimColor>
+                  {"  "}
+                  {money.spent === null
+                    ? "–"
+                    : formatMoney(money.spent, money.currency)}{" "}
+                  / {formatMoney(money.limit ?? 0, money.currency)}
+                </Text>
+              </Text>
             ) : null}
           </Box>
           {renderRobot(el, {
@@ -277,49 +320,42 @@ export function renderBand(el: ElementTable, p: BandProps) {
           })}
         </Box>
       </Box>
-      <Text dimColor>{divider}</Text>
 
-      <Box justifyContent="space-between" flexWrap="wrap" columnGap={3}>
-        <Box columnGap={1}>
-          <Button
-            key="k-claude"
-            label={`📄 ${noLink("CLAUDE.md")} ×${p.claudeFiles.length}`}
-            onPress={() => p.onToggle("claude")}
-          />
-          <Button
-            key="k-mcp"
-            label={`🔌 MCP ×${p.mcp.length}`}
-            onPress={() => p.onToggle("mcp")}
-          />
-        </Box>
-        <Box columnGap={3} width={rightCells}>
-          <Text>
-            💾{" "}
-            {p.tally.lastHit === null ? (
-              "–"
-            ) : (
-              <Text color={hitColor(p.tally.lastHit)}>{p.tally.lastHit}%</Text>
-            )}
-            <Text dimColor> Σ {sessionHit ?? "–"}%</Text>
-          </Text>
-          {p.cacheAt === 0 ? (
-            <Text dimColor>⏳ –</Text>
-          ) : left > 0 ? (
-            <Text color={ttlScale(left, p.ttlMs)}>⏳ {countdown(left)}</Text>
-          ) : (
-            <Text bold color={red}>
-              ❄ expired
+      <Box>
+        {/* Money on the left, the lists from the keep-alive column on. */}
+        <Box width={KEEP_ALIVE_COLUMN} columnGap={3}>
+          <Button key="k-session" plain onPress={() => p.onToggle("session")}>
+            {/* The same label width as context and cache: the amount sits under their values. */}
+            {label("session")}
+            <Text bold underline>
+              {usd(p.snap.usd)}
+            </Text>
+          </Button>
+          {money.balance === null ? null : (
+            <Text>
+              <Text dimColor>credits </Text>
+              {formatMoney(money.balance, money.currency)}
             </Text>
           )}
+        </Box>
+        <Box columnGap={3}>
+          <Button key="k-claude" plain onPress={() => p.onToggle("claude")}>
+            {/* noLink: the terminal would turn a file name into a link that opens the file. */}
+            <Text underline>{noLink("CLAUDE.md")}</Text>
+            <Text dimColor> {p.claudeFiles.length}</Text>
+          </Button>
+          <Button key="k-mcp" plain onPress={() => p.onToggle("mcp")}>
+            <Text underline>MCP</Text>
+            <Text dimColor> {p.mcp.length}</Text>
+          </Button>
         </Box>
       </Box>
 
       {renderList(el, {
-        open: p.open,
+        // The session breakdown has its own pane; an older state may still name it here.
+        open: p.open === "session" ? null : p.open,
         cwd: p.repo.cwd,
         files: p.claudeFiles,
-        mcp: p.mcp,
-        calls: p.calls,
         agents: p.agents,
         agentUsage: p.agentUsage,
         sessionUsd: p.snap.usd,

@@ -28,21 +28,24 @@ export const ttlScale = (remainingMs: number, ttlMs: number) => {
 
 export const tokens = (n: number) =>
   n >= 1_000_000
-    ? `${(n / 1_000_000).toFixed(1)}M`
+    ? `${Number((n / 1_000_000).toFixed(1))}M`
     : n >= 1000
       ? `${Math.round(n / 1000)}k`
       : String(n);
 
-export const usd = (n: number) => `$${n.toFixed(2)}`;
+/** Amounts in US dollars (the engine's session cost, price-list estimates): `3.71$`. */
+export const usd = (n: number) => `${n.toFixed(2)}$`;
 
-export const bar = (percent: number, cells = 10) => {
-  const filled = Math.max(
-    0,
-    Math.min(cells, Math.round((percent / 100) * cells)),
-  );
-
-  return "█".repeat(filled) + "░".repeat(cells - filled);
+const CURRENCY_SIGNS: Readonly<Record<string, string>> = {
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  CZK: " Kč",
 };
+
+/** An amount in the account's currency, the sign after the number: `3.71€`; `null` is dollars. */
+export const money = (n: number, currency: string | null) =>
+  `${n.toFixed(2)}${currency === null ? "$" : (CURRENCY_SIGNS[currency] ?? ` ${currency}`)}`;
 
 export const clock = (ms: number) => {
   const d = new Date(ms);
@@ -501,6 +504,13 @@ const dollars = (value: unknown) => {
   );
 };
 
+/** The ISO currency code of a `{ amount_minor, currency }` amount; `null` without one. */
+const currencyOf = (value: unknown) => {
+  const c = (value as { currency?: unknown } | null)?.currency;
+
+  return typeof c === "string" && c !== "" ? c.toUpperCase() : null;
+};
+
 /** The `spend` block of `api/oauth/usage` (usage beyond the plan); missing or broken JSON → `null`. */
 export const parseAccountSpend = (text: string): AccountSpend | null => {
   let spend: Record<string, unknown> | null | undefined;
@@ -519,6 +529,10 @@ export const parseAccountSpend = (text: string): AccountSpend | null => {
     limit: dollars(spend.limit) ?? dollars(spend.cap),
     balance: dollars(spend.balance),
     isEnabled: spend.enabled === true,
+    currency:
+      currencyOf(spend.used) ??
+      currencyOf(spend.limit) ??
+      currencyOf(spend.balance),
   };
 };
 
@@ -540,6 +554,8 @@ export const moneyLine = (
         limit: account?.limit ?? budget,
         balance: account?.balance ?? null,
         isOff: false,
+        // Without the account's own figures the amounts are the local estimate in dollars.
+        currency: account?.isEnabled === true ? account.currency : null,
       }
     : {
         label: "extra",
@@ -547,6 +563,7 @@ export const moneyLine = (
         limit: account?.limit ?? null,
         balance: account?.balance ?? null,
         isOff: account !== null && !account.isEnabled,
+        currency: account?.currency ?? null,
       };
 
 /** Thin bar `━━━───` split into a filled and an empty part so they can be colored separately. */
@@ -561,3 +578,143 @@ export const thinBar = (percent: number, cells: number) => {
 
 /** `claude-opus-5-5` → `opus-5-5`. */
 export const shortModel = (model: string) => model.replace(/^claude-/, "");
+
+/**
+ * Whether keep-alive should send its request now: switched on, a cache to keep, not expired
+ * yet (a request would write the whole context again) and at most `leadMs` left of its TTL.
+ */
+export const isKeepAliveDue = (
+  isOn: boolean,
+  cacheAt: number,
+  ttlMs: number,
+  leadMs: number,
+  now: number,
+) => {
+  const left = cacheAt + ttlMs - now;
+
+  return isOn && cacheAt > 0 && left > 0 && left <= leadMs;
+};
+
+/** `name` and `color` from an agent definition's frontmatter; `null` without both. */
+export const parseAgentDefinition = (text: string) => {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+  if (front === undefined) return null;
+  const field = (key: string) =>
+    new RegExp(`^${key}:\\s*["']?([^"'\\r\\n]+?)["']?\\s*$`, "m")
+      .exec(front)?.[1]
+      ?.trim();
+  const name = field("name");
+  const color = field("color");
+
+  return name && color ? { name, color } : null;
+};
+
+/** Agent colors are names Claude Code knows; the terminal knows purple as magenta. */
+const AGENT_COLORS: Readonly<Record<string, string>> = {
+  purple: "magenta",
+  pink: "magentaBright",
+  orange: "#ff8c00",
+};
+
+/** The terminal color an agent definition's `color` is drawn in. */
+export const agentTerminalColor = (color: string) =>
+  AGENT_COLORS[color.toLowerCase()] ?? color.toLowerCase();
+
+/** Active first, then the most called, then by name: the order of the MCP & skills pane. */
+export const sortByUse = <
+  T extends { name: string; calls: number; isOn: boolean },
+>(
+  items: readonly T[],
+): T[] =>
+  [...items].sort(
+    (a, b) =>
+      Number(b.isOn) - Number(a.isOn) ||
+      b.calls - a.calls ||
+      a.name.localeCompare(b.name),
+  );
+
+/** Switched-off MCP servers and skills, as a settings file holds them. */
+export type Disabled = { mcp: string[]; skills: string[] };
+
+/** Parses a settings file as an object; `null` when it is no JSON object. */
+const settingsObject = (text: string): Record<string, unknown> | null => {
+  try {
+    const value: unknown = JSON.parse(text);
+
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+
+    return null;
+  }
+};
+
+/** MCP servers named in `deniedMcpServers` and skills set to `"off"` in `skillOverrides`. */
+export const disabledFromSettings = (text: string | null): Disabled => {
+  const s = text === null ? null : settingsObject(text);
+  const denied = Array.isArray(s?.deniedMcpServers) ? s.deniedMcpServers : [];
+  const overrides =
+    typeof s?.skillOverrides === "object" && s.skillOverrides !== null
+      ? (s.skillOverrides as Record<string, unknown>)
+      : {};
+
+  return {
+    mcp: denied
+      .map((d) => (d as { serverName?: unknown } | null)?.serverName)
+      .filter((n): n is string => typeof n === "string"),
+    skills: Object.entries(overrides)
+      .filter(([, v]) => v === "off")
+      .map(([k]) => k),
+  };
+};
+
+/**
+ * The settings text with one MCP server or skill switched on or off; every other key kept.
+ * `null` when the existing text is no JSON object: nothing is written over it then.
+ */
+export const toggleInSettings = (
+  text: string | null,
+  kind: "mcp" | "skill",
+  name: string,
+  isOn: boolean,
+): string | null => {
+  const s = text === null || text.trim() === "" ? {} : settingsObject(text);
+  if (s === null) return null;
+  const next: Record<string, unknown> = { ...s };
+  if (kind === "mcp") {
+    const denied = (
+      Array.isArray(s.deniedMcpServers) ? s.deniedMcpServers : []
+    ).filter(
+      (d) => (d as { serverName?: unknown } | null)?.serverName !== name,
+    );
+    const list = isOn ? denied : [...denied, { serverName: name }];
+    if (list.length === 0) delete next.deniedMcpServers;
+    else next.deniedMcpServers = list;
+  } else {
+    const overrides = {
+      ...(typeof s.skillOverrides === "object" && s.skillOverrides !== null
+        ? (s.skillOverrides as Record<string, unknown>)
+        : {}),
+    };
+    if (isOn) delete overrides[name];
+    else overrides[name] = "off";
+    if (Object.keys(overrides).length === 0) delete next.skillOverrides;
+    else next.skillOverrides = overrides;
+  }
+
+  return `${JSON.stringify(next, null, 2)}\n`;
+};
+
+/** Where an MCP server comes from, as far as its name tells: `plugin`, `claude.ai`, or nothing. */
+export const mcpTag = (server: string) =>
+  /^plugin[_:]/i.test(server)
+    ? "plugin"
+    : /^claude[_.]ai[_ ]/i.test(server)
+      ? "claude.ai"
+      : "";
+
+/** A skill's origin worth a tag: Claude Code's own (`system`) or a plugin's. */
+export const skillTag = (source: string) =>
+  source === "built-in" ? "system" : source === "plugin" ? "plugin" : "";

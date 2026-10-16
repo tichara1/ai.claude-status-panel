@@ -31,11 +31,15 @@ export function renderRobot(el: ElementTable, p: RobotProps) {
       ? BLINK
       : IDLE;
   const spin = p.isWorking ? spinner(p.frame) : " ";
+  // In color only while working; at rest it stays in the background.
+  const color = p.isWorking ? "claude" : undefined;
 
   return (
     <Box flexDirection="column">
-      <Text color="claude">{rows[0]}</Text>
-      <Text color="claude">
+      <Text color={color} dimColor={!p.isWorking}>
+        {rows[0]}
+      </Text>
+      <Text color={color} dimColor={!p.isWorking}>
         {rows[1]} {spin}
       </Text>
     </Box>
