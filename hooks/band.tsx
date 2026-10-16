@@ -6,8 +6,6 @@ import type {
   SubagentUsage,
   KeepAlive,
   Kind,
-  McpServer,
-  MemFile,
   Miss,
   Money,
   Repo,
@@ -19,7 +17,6 @@ import {
   clock,
   countdown,
   green,
-  noLink,
   orange,
   red,
   percentCell,
@@ -50,9 +47,6 @@ export type BandProps = {
   effort: string;
   /** Subscription, e.g. `Max 5x`; empty when unknown. */
   plan: string;
-  /** CLAUDE.md, CLAUDE.local.md and AGENTS.md files in context. */
-  claudeFiles: readonly MemFile[];
-  mcp: readonly McpServer[];
   onToggle: (kind: Kind) => void;
   /** Opens a file or folder in the system. */
   onOpen: (path: string) => void;
@@ -67,6 +61,8 @@ export type BandProps = {
   onToggleKeepAlive: () => void;
   /** Fast-forwards the branch to its upstream (`git pull --ff-only`). */
   onPull: () => void;
+  /** Pushes the branch to its upstream after a confirming second click (`git push`). */
+  onPush: () => void;
 };
 
 /** Width of the context and money bars in cells. */
@@ -177,10 +173,20 @@ export function renderBand(el: ElementTable, p: BandProps) {
                 {p.repo.sync === null ? null : p.repo.sync.ahead === 0 &&
                   p.repo.sync.behind === 0 ? (
                   <Text dimColor> ✓</Text>
-                ) : p.repo.sync.ahead > 0 ? (
+                ) : p.repo.sync.ahead > 0 && p.repo.sync.behind > 0 ? (
                   <Text color={green}> ↑{p.repo.sync.ahead}</Text>
                 ) : null}{" "}
               </Text>
+              {/* Only ahead of upstream: a click (confirmed by a second one) pushes. */}
+              {p.repo.sync !== null &&
+              p.repo.sync.ahead > 0 &&
+              p.repo.sync.behind === 0 ? (
+                <Button key="k-push" plain onPress={p.onPush}>
+                  <Text color={green} underline>
+                    ↑{p.repo.sync.ahead}
+                  </Text>
+                </Button>
+              ) : null}
               {/* Behind upstream: a click fast-forwards the branch. */}
               {p.repo.sync !== null && p.repo.sync.behind > 0 ? (
                 <Button key="k-pull" plain onPress={p.onPull}>
@@ -251,14 +257,12 @@ export function renderBand(el: ElementTable, p: BandProps) {
             </Box>
             {/* The side panes start under the token count of the context row. */}
             <Box columnGap={3}>
+              {/* CLAUDE.md, rules, hooks and mods: the counts are in the pane. */}
               <Button key="k-claude" plain onPress={() => p.onToggle("claude")}>
-                {/* noLink: the terminal would turn a file name into a link that opens the file. */}
-                <Text underline>{noLink("CLAUDE.md")}</Text>
-                <Text dimColor> {p.claudeFiles.length}</Text>
+                <Text underline>SETTINGS</Text>
               </Button>
               <Button key="k-mcp" plain onPress={() => p.onToggle("mcp")}>
                 <Text underline>MCP</Text>
-                <Text dimColor> {p.mcp.length}</Text>
               </Button>
             </Box>
           </Box>

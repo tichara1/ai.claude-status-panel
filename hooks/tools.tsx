@@ -144,14 +144,14 @@ export function renderTools(el: ElementTable, p: ToolsProps) {
         request writes the prompt cache again.
       </Text>
       <Text> </Text>
-      <Text dimColor>MCP servers</Text>
+      <Text dimColor>MCP servers {p.mcp.length}</Text>
       {mcpRows.length === 0 ? (
         <Text dimColor>No MCP server.</Text>
       ) : (
         mcpRows.map(row)
       )}
       <Text dimColor>{"─".repeat(width)}</Text>
-      <Text dimColor>Skills</Text>
+      <Text dimColor>Skills {p.skills.length}</Text>
       {skillRows.length === 0 ? (
         <Text dimColor>No skill.</Text>
       ) : (

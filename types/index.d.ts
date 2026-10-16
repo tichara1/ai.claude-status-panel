@@ -153,6 +153,30 @@ declare module "claude-code" {
       spawnedAgents: number;
       /** Files whose preview is open in the CLAUDE.md pane. */
       expandedFiles: string[];
+      /** Line count and modification time per memory file. */
+      fileDetails: Record<
+        string,
+        { lines: number; mtimeMs: number; imports: string[] }
+      >;
+      /** Hook commands of every settings source, in load order. */
+      hooks: {
+        scope: "user" | "project" | "local" | "flag" | "policy";
+        event: string;
+        matcher: string;
+        command: string;
+      }[];
+      /** Installed plugins that bring a hooks module, in load order. */
+      mods: {
+        id: string;
+        version: string;
+        scope: "user" | "project" | "local" | "flag" | "policy" | "";
+        isOn: boolean;
+        path: string;
+      }[];
+      /** The settings file of each source. */
+      settingsPaths: Partial<
+        Record<"user" | "project" | "local" | "flag" | "policy", string>
+      >;
       /** File text by path, read when its preview opens. */
       previews: Record<string, string>;
       /** Skills the session lists. */

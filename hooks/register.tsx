@@ -20,6 +20,9 @@ import type {
 import { renderBand } from "./band";
 import type { Disabled } from "./format";
 import { renderList } from "./lists";
+import type { HookRow, ModRow, SettingsScope } from "./context";
+import { hookRows, importsOf, pluginRows, SETTINGS_ORDER } from "./context";
+import type { FileDetail } from "./memory";
 import { renderMemory } from "./memory";
 import { renderTools } from "./tools";
 import {
@@ -370,6 +373,26 @@ const SESSION_PANE = "session";
 /** Wide enough for a subagent row: description, model, tokens, status and cost. */
 const SESSION_PANE_COLUMNS = 96;
 
+/** Line count and modification time per memory file. */
+const fileDetailsAtom = atom(
+  { plugin: "status-panel", key: "fileDetails" } as const,
+  {} as Record<string, FileDetail>,
+);
+/** Hook commands of every settings source, in load order. */
+const hooksAtom = atom(
+  { plugin: "status-panel", key: "hooks" } as const,
+  [] as HookRow[],
+);
+/** Installed plugins that bring a hooks module, in load order. */
+const modsAtom = atom(
+  { plugin: "status-panel", key: "mods" } as const,
+  [] as ModRow[],
+);
+/** The settings file of each source, for the hooks' `↗ open`. */
+const settingsPathsAtom = atom(
+  { plugin: "status-panel", key: "settingsPaths" } as const,
+  {} as Partial<Record<SettingsScope, string>>,
+);
 /** The pane with the CLAUDE.md and AGENTS.md files in context. */
 const MEMORY_PANE = "memory";
 /** Files whose preview is open in the CLAUDE.md pane. */
@@ -382,10 +405,6 @@ const previewsAtom = atom(
   { plugin: "status-panel", key: "previews" } as const,
   {} as Record<string, string>,
 );
-
-/** The memory files the panel lists: CLAUDE.md, CLAUDE.local.md and AGENTS.md. */
-const memoryFiles = (mem: readonly MemFile[]) =>
-  mem.filter((f) => /^(claude(\.local)?|agents)\.md$/i.test(baseName(f.path)));
 
 /** Opens or closes a file's preview; opening reads the file again, so the preview is current. */
 async function togglePreview($: EngineInterface, path: string) {
@@ -451,6 +470,44 @@ async function pullUpstream($: EngineInterface) {
   }
 }
 
+/** How long the first click on ↑n waits for the second, confirming one. */
+const PUSH_CONFIRM_MS = 5_000;
+/** When ↑n was clicked first; 0 while no push waits for its confirmation. */
+let pushArmedAt = 0;
+
+/**
+ * Pushes the branch to its upstream with a plain `git push` (never forced). The first click
+ * only asks for a second one within 5 s, so a stray click sends nothing out.
+ */
+async function pushUpstream($: EngineInterface) {
+  const now = await $.clock.now();
+  if (now - pushArmedAt > PUSH_CONFIRM_MS) {
+    pushArmedAt = now;
+    $.ui.toast("Click ↑ again within 5 s to git push");
+
+    return;
+  }
+  pushArmedAt = 0;
+  if (isPulling) return;
+  isPulling = true;
+  try {
+    const cwd = await $.session.cwd();
+    $.ui.toast("git push…");
+    const r = await $.process.run(["git", "push"], { cwd }).catch(() => null);
+    const firstLine = (text: string) => text.trim().split("\n")[0] ?? "";
+    $.ui.toast(
+      r === null
+        ? "git push: git did not run"
+        : r.exitCode === 0
+          ? "Pushed to upstream"
+          : `git push failed: ${firstLine(r.stderr) || firstLine(r.stdout)}`,
+    );
+    await refreshRepo($);
+  } finally {
+    isPulling = false;
+  }
+}
+
 async function refreshContext($: EngineInterface) {
   const b = (await $.session.usage({ breakdown: "summary" })).context.breakdown;
   const model = b?.model ?? "";
@@ -471,6 +528,72 @@ async function refreshContext($: EngineInterface) {
   await update($, skillsAtom, () => skills);
   const local = await readLocalSettings($);
   await update($, disabledAtom, () => disabledFromSettings(local));
+  await refreshContextFiles($, files);
+}
+
+/**
+ * Line counts and modification times of the memory files, and the hooks of every settings
+ * source with the file each lives in: what the CLAUDE.md pane shows.
+ */
+async function refreshContextFiles(
+  $: EngineInterface,
+  files: readonly MemFile[],
+) {
+  const details: Record<string, FileDetail> = {};
+  const homeDir =
+    (await $.env.get("USERPROFILE")) ?? (await $.env.get("HOME")) ?? "";
+  for (const f of files) {
+    const text = await $.fs.read(f.path).catch(() => null);
+    const stat = await $.fs.stat(f.path).catch(() => null);
+    details[f.path] = {
+      lines: typeof text === "string" ? text.split(/\r?\n/).length : 0,
+      mtimeMs: stat?.mtimeMs ?? 0,
+      // The files it pulls in with `@path`: the pane shows them under it.
+      imports: typeof text === "string" ? importsOf(text, f.path, homeDir) : [],
+    };
+  }
+  await update($, fileDetailsAtom, () => details);
+  const hooks: HookRow[] = [];
+  const enabled: [SettingsScope, unknown][] = [];
+  for (const scope of SETTINGS_ORDER) {
+    const settings = (await $.settings
+      .read({ source: scope })
+      .catch(() => null)) as {
+      hooks?: unknown;
+      enabledPlugins?: unknown;
+    } | null;
+    hooks.push(...hookRows(scope, settings?.hooks));
+    enabled.push([scope, settings?.enabledPlugins]);
+  }
+  await update($, hooksAtom, () => hooks);
+  const configDir = await $.env.get("CLAUDE_CONFIG_DIR");
+  const home = (await $.env.get("USERPROFILE")) ?? (await $.env.get("HOME"));
+  const userDir =
+    configDir ?? (home === undefined ? undefined : `${home}/.claude`);
+  const cwd = await $.session.cwd();
+  // Mods: the installed plugins that bring a hooks module, in the order the settings load.
+  const installed = await $.fs
+    .read(`${userDir ?? "~/.claude"}/plugins/installed_plugins.json`)
+    .catch(() => null);
+  const mods: ModRow[] = [];
+  for (const row of pluginRows(
+    typeof installed === "string" ? installed : null,
+    enabled,
+  )) {
+    const manifest =
+      row.path === ""
+        ? null
+        : await $.fs.read(`${row.path}/hooks/hooks.json`).catch(() => null);
+    if (typeof manifest === "string" && manifest.includes('"modules"')) {
+      mods.push(row);
+    }
+  }
+  await update($, modsAtom, () => mods);
+  await update($, settingsPathsAtom, () => ({
+    ...(userDir === undefined ? {} : { user: `${userDir}/settings.json` }),
+    project: `${cwd}/.claude/settings.json`,
+    local: `${cwd}/.claude/settings.local.json`,
+  }));
 }
 
 async function refreshPlan($: EngineInterface) {
@@ -824,15 +947,21 @@ export const register: Register = (on, options) => {
     renderMemory($.ui.resolve(e), {
       columns: e.props.bodyColumns,
       cwd: (await read($, repoAtom)).cwd,
-      files: memoryFiles(await read($, memAtom)),
+      now: await read($, nowAtom),
+      files: await read($, memAtom),
+      details: await read($, fileDetailsAtom),
+      hooks: await read($, hooksAtom),
+      mods: await read($, modsAtom),
+      settingsPaths: await read($, settingsPathsAtom),
       expanded: await read($, expandedFilesAtom),
       previews: await read($, previewsAtom),
       onToggle: async (path: string) => {
         await togglePreview($, path);
       },
-      onOpen: async (path: string) => {
-        await openWithOs($, path);
-        $.ui.toast(`Opening ${baseName(path)}`);
+      onOpenFolder: async (path: string) => {
+        const folder = path.replace(/[\\/][^\\/]*$/, "");
+        await openWithOs($, folder);
+        $.ui.toast(`Opening ${folder}`);
       },
     }),
   );
@@ -859,7 +988,6 @@ export const register: Register = (on, options) => {
     const snap = await read($, snapAtom);
     if (e.props.hasSurvey || snap === null) return next(e);
 
-    const mem = await read($, memAtom);
     const toggle = async (kind: Kind) => {
       // The session breakdown is long: it opens in its own pane, not in the band.
       if (kind === "session") {
@@ -874,7 +1002,7 @@ export const register: Register = (on, options) => {
         return;
       }
       // CLAUDE.md and AGENTS.md files open in a pane too.
-      await togglePane($, MEMORY_PANE, "CLAUDE.md");
+      await togglePane($, MEMORY_PANE, "Settings");
     };
     // A file in the default app, a folder in the file manager.
     const openPath = async (path: string) => {
@@ -899,14 +1027,15 @@ export const register: Register = (on, options) => {
       model: await read($, modelAtom),
       effort: await read($, effortAtom),
       plan: await read($, planAtom),
-      claudeFiles: memoryFiles(mem),
-      mcp: await read($, mcpAtom),
       onToggle: toggle,
       onOpen: openPath,
       isWorking: e.props.isWorking,
       frame: await read($, frameAtom),
       showResets: await read($, showResetsAtom),
       keepAlive: await read($, keepAliveAtom),
+      onPush: async () => {
+        await pushUpstream($);
+      },
       onPull: async () => {
         await pullUpstream($);
       },

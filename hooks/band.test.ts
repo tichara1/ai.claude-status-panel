@@ -531,3 +531,24 @@ test("on Enterprise the spent amount and budget sit on their own row under the b
 
   expect(amounts).toBeDefined();
 });
+
+test("pressing the ahead arrow twice pushes; once only asks for confirmation", async ($, on) => {
+  const runs: string[] = [];
+  const ui = await mountBand($, on, runs, (argv) =>
+    argv.includes("--show-current")
+      ? "main\n"
+      : argv.includes("--left-right")
+        ? "0\t2\n"
+        : argv.includes("push")
+          ? ""
+          : null,
+  );
+  runs.length = 0;
+
+  await ui.press({ key: "k-push" });
+  const afterFirst = runs.filter((r) => r.includes('"push"')).length;
+  await ui.press({ key: "k-push" });
+
+  expect(afterFirst).toBe(0);
+  expect(runs.filter((r) => r.includes('"git","push"')).length).toBe(1);
+});
